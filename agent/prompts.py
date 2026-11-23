@@ -5,7 +5,8 @@ from __future__ import annotations
 from .config import Facts, greeting_word
 
 JSON_CONTRACT = """\
-Reply with ONE JSON object and nothing else - no prose, no code fences:
+Reply in json: one json object and nothing else - no prose, no code fences,
+no explanation before or after it. The json object has exactly these keys:
 {
   "reply": "what to send to the manager, at most 3 sentences",
   "understood": "one short line: what the manager just said",
@@ -38,6 +39,14 @@ Field notes:
 - off_topic: true if their message is not about this reservation.
 - Still fill "reply" even when needs_operator, off_topic or asked_if_bot is
   true; the code may replace it with a fixed line.
+
+A complete example of a valid json reply:
+{"reply": "Good evening, might you have a table for two at 9pm on Monday?",
+ "understood": "nothing yet, I am opening the conversation",
+ "decision": "ask for the table and for the restaurant's name",
+ "next_state": "requesting", "needs_operator": false, "off_topic": false,
+ "requested_change": "none", "change_value": null, "asked_if_bot": false,
+ "manager_confirmed": false, "restaurant_name": null}
 """
 
 
@@ -147,6 +156,18 @@ OPEN_CONVERSATION = (
 )
 
 RETRY_NUDGE = (
-    "Your last message was not a single valid JSON object with the required "
-    "fields. Send the JSON object only - no prose, no code fences."
+    "Your last message was not a single valid json object with the required "
+    "fields. Send the json object only - no prose, no code fences."
+)
+
+#: Sent as the last message of every call. Measured on DeepSeek: 20/20 clean
+#: replies with it, 13/20 without (the rest came back as whitespace).
+TURN_NUDGE = (
+    "Reply now with the json object for this turn: all the keys from the "
+    "schema, nothing else."
+)
+
+EMPTY_NUDGE = (
+    "Your last message was empty. Send the json object for this turn now, "
+    "with all its keys and nothing else."
 )

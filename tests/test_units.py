@@ -539,6 +539,26 @@ sent = fake.calls[0]
 check("json mode asked for", sent.get("response_format") == {"type": "json_object"})
 check("thinking kept short", sent.get("reasoning_effort") == "low")
 check("room to answer", sent.get("max_tokens") == 2000)
+check("the json instruction is last", sent["messages"][-1]["content"].startswith("Reply now with the json"))
+check("the word json is in the system prompt", "json" in build_system_prompt(facts, "greeting", None))
+check("the contract shows an example", '"next_state": "requesting"' in build_system_prompt(facts, "greeting", None))
+
+# whitespace back from DeepSeek's json mode: retry at once, do not feed it back
+brain, fake = make_brain(["   \n  ", REPLY])
+check("a blank reply is retried", brain.decide("system", []) is not None)
+check("two calls made", len(fake.calls) == 2)
+check(
+    "the blank turn is not echoed back",
+    all(message["role"] != "assistant" for message in fake.calls[1]["messages"]),
+)
+check("and the retry says so", "empty" in fake.calls[1]["messages"][-1]["content"])
+
+brain, fake = make_brain(["   ", "still not json", REPLY])
+check("three attempts are allowed", brain.decide("system", []) is not None)
+check("all three were used", len(fake.calls) == 3)
+brain, fake = make_brain(["   ", "nope", "   "])
+check("after three it gives up", brain.decide("system", []) is None)
+check("and stops at three", len(fake.calls) == 3)
 
 brain, fake = make_brain([TypeError("unsupported parameter: reasoning_effort"), REPLY])
 check("unsupported param survived", brain.decide("system", []) is not None)

@@ -115,6 +115,24 @@ happy with it...") and a decline appends its own. On top of that,
 logs `escalation_skipped`. Belt and braces, because the prompt alone had
 already failed once.
 
+**Measured, not guessed: how to ask DeepSeek for json.** A live run on
+deepseek-flash came back as pure whitespace on roughly a third of calls in
+json mode. Three variants, ten calls each, same prompt and history:
+
+| variant | clean | whitespace | prose, not json |
+| --- | --- | --- | --- |
+| `response_format=json_object` | 6-7 / 10 | 3-4 | 0 |
+| no `response_format`, parse from text | 4 / 10 | 0 | 6 |
+| `json_object` + a trailing "reply now with the json object" turn | 10 / 10, twice over | 0 | 0 |
+
+So json mode stays, the system prompt says "json" in lower case and carries a
+filled example (DeepSeek requires the word, and the example settles the
+shape), and `TURN_NUDGE` goes in as the last message of every call - the
+instruction has to be the last thing the model reads. A turn gets three
+attempts, not two, before the operator is asked; a whitespace reply is
+retried at once and never fed back to the model as an assistant turn, since
+that only teaches it that blank is acceptable.
+
 **Reasoning models need room.** The same run produced two empty completions
 in a row from gpt-oss on Groq: 500 tokens were spent thinking, nothing was
 left to answer with, and a question about the date became an escalation. The
