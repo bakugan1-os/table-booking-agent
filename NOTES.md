@@ -115,32 +115,6 @@ happy with it...") and a decline appends its own. On top of that,
 logs `escalation_skipped`. Belt and braces, because the prompt alone had
 already failed once.
 
-**Measured, not guessed: how to ask DeepSeek for json.** A live run on
-deepseek-flash came back as pure whitespace on roughly a third of calls in
-json mode. Three variants, ten calls each, same prompt and history:
-
-| variant | clean | whitespace | prose, not json |
-| --- | --- | --- | --- |
-| `response_format=json_object` | 6-7 / 10 | 3-4 | 0 |
-| no `response_format`, parse from text | 4 / 10 | 0 | 6 |
-| `json_object` + a trailing "reply now with the json object" turn | 10 / 10, twice over | 0 | 0 |
-
-So json mode stays, the system prompt says "json" in lower case and carries a
-filled example (DeepSeek requires the word, and the example settles the
-shape), and `TURN_NUDGE` goes in as the last message of every call - the
-instruction has to be the last thing the model reads. A turn gets three
-attempts, not two, before the operator is asked; a whitespace reply is
-retried at once and never fed back to the model as an assistant turn, since
-that only teaches it that blank is acceptable.
-
-**Reasoning models need room.** The same run produced two empty completions
-in a row from gpt-oss on Groq: 500 tokens were spent thinking, nothing was
-left to answer with, and a question about the date became an escalation. The
-request now carries `max_tokens=2000`, `reasoning_effort="low"` and
-`response_format={"type": "json_object"}`, and each of the last two is
-dropped and retried if the endpoint complains about it, so DeepSeek or
-anything else still works.
-
 **The model can no longer get ahead of the agreed booking.**
 `conflicting_values()` compares the clock times and party sizes in a piece of
 text against the agreed booking, and runs on both sides: on the agent's own
@@ -204,6 +178,54 @@ attribute lookup on the coroutine blows up.
 burst becomes one LLM call. The `typing...` action shows while the model
 thinks. The LLM call runs in a worker thread (`asyncio.to_thread`) so the
 blocking SDK does not stall the Telethon event loop.
+
+## Choosing the LLM
+
+Nothing in the code is tied to a provider: `openai` as a plain
+OpenAI-compatible client, and `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` in
+`.env`. Switching providers is a change to those three lines. Everything
+below is what the switching actually taught us.
+
+**Groq, `openai/gpt-oss-120b` - development.** Free, fast, and the plan all
+along was to develop here and move later. It is a reasoning model, and with
+the original `max_tokens=500` it spent the whole budget thinking and
+returned an empty string twice in a row, which turned a plain question about
+the date into an operator escalation. Hence `max_tokens=2000` and
+`reasoning_effort="low"`. It was also the model that kept re-asking for an
+approval it had already been given, which is what the `_already_agreed()`
+guardrail and the operator note in the history exist for.
+
+**DeepSeek, `deepseek-flash` - the real run.** Steadier on the booking logic
+and cheap enough not to think about. Its quirk is json mode: a run on
+2026-11-23 came back as pure whitespace (63-146 characters of it) on roughly
+a third of calls. Three request styles, ten calls each, same prompt and the
+same "9pm is fully booked, 9.30pm instead?" turn:
+
+| variant | clean json | whitespace | prose, not json |
+| --- | --- | --- | --- |
+| `response_format=json_object` | 6-7 / 10 | 3-4 | 0 |
+| no `response_format`, json parsed out of the text | 4 / 10 | 0 | 6 |
+| `json_object` + a trailing "reply now with the json object" turn | 10 / 10, twice over | 0 | 0 |
+
+Dropping `response_format` is the worst of the three: the model simply
+answers in prose ("Let me check whether 9.30pm would suit...") and no
+amount of parsing recovers a decision from that. So json mode stays, the
+system prompt says "json" in lower case and carries a filled example
+(DeepSeek wants the word; the example settles the shape), and `TURN_NUDGE`
+goes in as the last message of every call - the instruction has to be the
+last thing the model reads, and the history had been ending on the
+manager's line. A turn now gets three attempts rather than two, and a
+whitespace reply is retried at once and never fed back as an assistant turn,
+which would only teach the model that blank is acceptable.
+
+Neither `reasoning_effort` nor `response_format` is accepted everywhere, so
+each is dropped and the call retried if the endpoint complains, and the drop
+is journalled as `llm_param_dropped`.
+
+**Before a real booking**, point `tools/probe_llm.py` at whatever model is
+configured. Ten clean replies out of ten is the bar; anything less will show
+up as `llm_empty`, `llm_invalid` or an `invalid_output` escalation in the
+middle of a conversation with a restaurant.
 
 ## Known limits
 

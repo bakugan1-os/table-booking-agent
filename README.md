@@ -103,6 +103,21 @@ coroutines called without `await`, and the stub client in
 `test_conversation.py` keeps Telethon's async/sync split, so the startup and
 sign-in paths fail here rather than in front of the manager.
 
+### Checking the model before a run
+
+Neither suite talks to the LLM. Before a real booking - and after changing
+`LLM_MODEL` or the provider - check that the model returns usable json:
+
+```powershell
+python tools\probe_llm.py                     # 10 calls, exactly as the agent asks
+python tools\probe_llm.py json_object text    # compare request styles
+```
+
+It sends the agent's real system prompt built from `facts.test.yaml`, so
+nothing personal goes to the provider, and prints how many replies were
+clean json, blank or prose. Ten out of ten is the bar; `NOTES.md` has the
+measurements behind that. Note that this one does cost a few API calls.
+
 Each prints `passed: N` and exits non-zero on the first failure, listing the
 checks by name.
 
@@ -186,6 +201,7 @@ Enforced in code, not just asked for in the prompt:
 | `agent/conversation.py` | Telethon handlers, debounce, escalation, reminder |
 | `agent/journal.py` | `logs/decisions.jsonl` |
 | `tests/` | two stub-driven test scripts |
+| `tools/probe_llm.py` | checks an LLM endpoint before a real run |
 | `state.json` | state, history, pending question (git-ignored) |
 | `logs/decisions.jsonl` | one line per message, escalation and decision |
 
