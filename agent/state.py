@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field, replace
+from datetime import date as date_cls, datetime, timezone
 from pathlib import Path
+
+from .config import Facts
 
 STATES = ("greeting", "requesting", "negotiating", "confirmed", "done")
 _ORDER = {name: index for index, name in enumerate(STATES)}
@@ -29,13 +31,56 @@ class Conversation:
     history: list[dict] = field(default_factory=list)
     pending_operator: bool = False
     pending_topic: str | None = None
+    pending_change_value: str | None = None
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)
     reminder_sent: bool = False
     phone_requested: bool = False
-    restaurant_name: str | None = None
     last_agent_sent_at: str | None = None
+    #: What has actually been agreed: seeded from facts.yaml, and changed
+    #: only when the operator approves a change. The recap reads this, never
+    #: the facts file, or a table moved to 9.30pm is confirmed as 9pm.
+    agreed: dict = field(default_factory=dict)
+
+    # --- what is on the table --------------------------------------------
+
+    def ensure_agreed(self, facts: Facts) -> None:
+        """Seed the agreed booking from the facts, keeping anything already set."""
+        for key, value in (
+            ("party_size", facts.party_size),
+            ("time", facts.time),
+            ("date", facts.date.isoformat()),
+            ("guest_name", facts.guest_name),
+            ("restaurant_name", None),
+        ):
+            self.agreed.setdefault(key, value)
+
+    def booking(self, facts: Facts) -> Facts:
+        """The facts as agreed - what the agent should be saying out loud."""
+        self.ensure_agreed(facts)
+        return replace(
+            facts,
+            party_size=int(self.agreed["party_size"]),
+            time=str(self.agreed["time"]),
+            date=date_cls.fromisoformat(str(self.agreed["date"])),
+            guest_name=str(self.agreed["guest_name"]),
+            restaurant_name=self.agreed.get("restaurant_name"),
+        )
+
+    @property
+    def restaurant_name(self) -> str | None:
+        return self.agreed.get("restaurant_name")
+
+    @restaurant_name.setter
+    def restaurant_name(self, value: str | None) -> None:
+        self.agreed["restaurant_name"] = value
+
+    def agree(self, key: str, value: object) -> tuple[object, object]:
+        """Record an operator-approved change; returns (before, after)."""
+        before = self.agreed.get(key)
+        self.agreed[key] = value
+        return before, value
 
     # --- history ---------------------------------------------------------
 
@@ -108,6 +153,10 @@ class Conversation:
             return None
         known = {f for f in cls.__dataclass_fields__}
         convo = cls(**{k: v for k, v in data.items() if k in known})
+        # state.json written before the agreed block existed
+        legacy_restaurant = data.get("restaurant_name")
+        if legacy_restaurant and not convo.agreed.get("restaurant_name"):
+            convo.agreed["restaurant_name"] = legacy_restaurant
         if convo.state not in _ORDER:
             convo.state = "greeting"
         return convo

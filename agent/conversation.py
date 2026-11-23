@@ -35,6 +35,7 @@ class BookingAgent:
         self.brain = brain
         self.journal = journal
 
+        self.convo.ensure_agreed(facts)
         self.manager = None
         self.me_id: int | None = None
         self._debounce: asyncio.Task | None = None
@@ -152,12 +153,58 @@ class BookingAgent:
         if topic and topic not in ("other", "secret", "invalid_output"):
             if topic not in self.convo.resolved_changes:
                 self.convo.resolved_changes.append(topic)
+            self._apply_approved_change(topic, text)
         self.convo.pending_operator = False
         self.convo.pending_topic = None
+        self.convo.pending_change_value = None
         self.convo.reminder_sent = False
         self._save()
 
         await self._respond()
+
+    def _apply_approved_change(self, topic: str, operator_text: str) -> None:
+        """The agreed booking moves only here, and only on a clear yes."""
+        value = self.convo.pending_change_value
+        approved = guardrails.operator_approves(operator_text)
+        if not approved or not value:
+            self.journal.write(
+                "change_not_applied",
+                topic=topic,
+                approved=approved,
+                value=value,
+                reason="no clear approval" if not approved else "no value to apply",
+            )
+            return
+
+        if topic == "time":
+            parsed = guardrails.parse_clock(value)
+            key = "time"
+        elif topic == "party_size":
+            parsed = guardrails.parse_party_size(value)
+            key = "party_size"
+        else:  # deposit, payment: nothing in the booking itself moves
+            self.journal.write("change_approved", topic=topic, value=value)
+            return
+
+        if parsed is None:
+            self.journal.write(
+                "change_not_applied",
+                level="warning",
+                topic=topic,
+                value=value,
+                reason="could not read the value",
+            )
+            return
+
+        before, after = self.convo.agree(key, parsed)
+        self.journal.write(
+            "change_approved",
+            topic=topic,
+            field=key,
+            **{"from": before, "to": after},
+            operator=operator_text,
+        )
+        print(f"Operator approved a change: {key} {before} -> {after}.")
 
     # --- the turn --------------------------------------------------------
 
@@ -165,8 +212,9 @@ class BookingAgent:
         async with self._lock:
             # Worked out here, not by the model: London's clock decides this.
             greeting = greeting_word(self.facts.tz)
+            booking = self.convo.booking(self.facts)
             system_prompt = build_system_prompt(
-                self.facts, self.convo.state, self.convo.restaurant_name, greeting
+                booking, self.convo.state, booking.restaurant_name, greeting
             )
             history = list(self.convo.history)
 
@@ -212,7 +260,7 @@ class BookingAgent:
             # 1. Off topic, including role-change attempts.
             if decision.off_topic and not secret:
                 await self._send(
-                    guardrails.off_topic_line(self.facts),
+                    guardrails.off_topic_line(booking),
                     decision=decision,
                     note="off_topic",
                 )
@@ -221,7 +269,7 @@ class BookingAgent:
             # 2. "Are you a bot?" - honest, and the wording comes from the code.
             if decision.asked_if_bot or guardrails.asks_if_bot(last_manager):
                 await self._send(
-                    guardrails.bot_disclosure_line(self.facts),
+                    guardrails.bot_disclosure_line(booking),
                     decision=decision,
                     note="bot_disclosure",
                 )
@@ -248,10 +296,10 @@ class BookingAgent:
             )
             recap = new_state == "confirmed" and self.convo.state != "confirmed"
             if recap:
-                reply = guardrails.recap_line(self.facts, self.convo.restaurant_name)
-                missing = guardrails.recap_missing(
-                    reply, self.facts, self.convo.restaurant_name
-                )
+                # Built from what was agreed, not from facts.yaml: a table
+                # moved to 9.30pm must not be confirmed back as 9pm.
+                reply = guardrails.recap_line(booking)
+                missing = guardrails.recap_missing(reply, booking)
                 if missing:
                     self.journal.write(
                         "recap_incomplete", level="warning", missing=missing, text=reply
@@ -261,7 +309,7 @@ class BookingAgent:
                     decision.reply,
                     allow_phone=self.convo.phone_requested,
                     greeting=greeting,
-                    booking=self.facts.time,
+                    booking=booking.time,
                 )
 
             if not reply:
@@ -323,17 +371,20 @@ class BookingAgent:
     ) -> None:
         self.convo.question_counter += 1
         tag = f"[Q{self.convo.question_counter}]"
+        value = decision.change_value if decision else None
+        proposed = f" ({value})" if value else ""
         body = (
             f"{tag} {question or 'I need your decision before replying.'}\n\n"
             f"Manager said: {last_manager or '(nothing yet)'}\n"
-            f"Topic: {topic} | state: {self.convo.state}\n\n"
-            "Reply in this chat and I will carry on."
+            f"Topic: {topic}{proposed} | state: {self.convo.state}\n\n"
+            "Reply in this chat and I will carry on. Say yes to approve the change."
         )
         message = await self.client.send_message("me", body)
 
         self.convo.agent_saved_ids.append(message.id)
         self.convo.pending_operator = True
         self.convo.pending_topic = topic
+        self.convo.pending_change_value = value
         self._save()
 
         fields = {
@@ -341,6 +392,7 @@ class BookingAgent:
             "chat": "saved",
             "tag": tag,
             "topic": topic,
+            "value": value,
             "text": body,
             "state": self.convo.state,
         }
@@ -365,7 +417,7 @@ class BookingAgent:
                 continue
             async with self._lock:
                 await self._send(
-                    guardrails.reminder_line(self.facts),
+                    guardrails.reminder_line(self.convo.booking(self.facts)),
                     note="reminder",
                     event="reminder",
                 )

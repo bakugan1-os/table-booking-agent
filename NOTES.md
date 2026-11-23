@@ -82,6 +82,23 @@ is checked in code: all five fields (party size, time, date, restaurant,
 guest name) must appear in the text that went out, or a `recap_incomplete`
 warning lands in the journal.
 
+**The agreed booking, not the facts file.** `state.json` carries an `agreed`
+block - party size, time, date, restaurant, guest name - seeded from the
+facts file and moved only when the operator approves a change. The third dry
+run settled on 9.30pm and the recap still read 9pm, because the recap was
+built from `facts.yaml`; now the recap, `recap_missing()`, the prompt and
+every canned line are built from `convo.booking(facts)`. A change needs three
+things to land: the model's `change_value` (the concrete "21:30"), an
+escalation on that topic, and a clear yes from the operator (`operator_approves`
+- a rejection anywhere in the reply wins). Each move is journalled as
+`change_approved` with `from`/`to`; refusals and unreadable values become
+`change_not_applied`.
+
+**The agent speaks for the guest.** "We look forward to seeing you" is the
+restaurant's line, and it went out in the recap. The recap now ends "Many
+thanks, we look forward to it", the prompt has a paragraph on whose side the
+agent is, and a test asserts no fixed line uses the restaurant's voice.
+
 **Disagreements are logged, not acted on.** If the manager's message carries
 a booking marker (reserved, booked, confirmed, that's done, see you then) and
 the model still says `manager_confirmed: false`, a `confirmation_mismatch`

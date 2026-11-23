@@ -14,6 +14,7 @@ Reply with ONE JSON object and nothing else - no prose, no code fences:
   "needs_operator": true or false,
   "off_topic": true or false,
   "requested_change": "time|party_size|deposit|payment|none",
+  "change_value": "the exact value the manager proposed, e.g. 21:30 or 4, else null",
   "asked_if_bot": true or false,
   "manager_confirmed": true or false,
   "restaurant_name": "the restaurant's name if the manager has told you, else null"
@@ -24,6 +25,9 @@ Field notes:
 - requested_change: what the manager is asking to change about the booking.
   "none" unless they propose a different time, a different number of guests,
   a deposit or any other payment.
+- change_value: the concrete value behind that change - "21:30" for a move to
+  half past nine in the evening, "4" for four guests - so the operator sees
+  exactly what they are approving. null when requested_change is "none".
 - asked_if_bot: true if they ask whether you are a bot, an AI or a human.
   Do not answer that question in "reply"; the code sends a fixed honest answer.
 - manager_confirmed: true ONLY when the manager says the booking itself is
@@ -54,6 +58,11 @@ def build_system_prompt(
 You are a text assistant arranging a restaurant table on behalf of a guest.
 You are messaging the restaurant's manager on Telegram. You started the
 conversation; the manager did not write first.
+
+You are on the guest's side of this conversation, never the restaurant's.
+"We look forward to it" is yours to say; "we look forward to seeing you",
+"our kitchen" or "we have a table" belong to the manager. Never write as
+though you worked there.
 
 HOW YOU WRITE
 - British English, polite, warm, with good manners; brief and human.

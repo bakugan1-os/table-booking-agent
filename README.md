@@ -135,8 +135,12 @@ Topic: deposit | state: negotiating
 Reply in this chat and I will carry on.
 ```
 
-Reply in Saved Messages and it continues immediately. While it waits, the
-manager's messages are buffered, not answered. A note you write in Saved
+Reply in Saved Messages and it continues immediately. A clear **yes** moves
+the agreed booking (and only then): the new time or party size is written to
+`state.json` and journalled as `change_approved`, and every later message -
+including the confirmation recap - uses the agreed values, not what is still
+written in the facts file. While it waits, the manager's messages are
+buffered, not answered. A note you write in Saved
 Messages when nothing is pending is kept as context and sends nothing.
 
 ## Guardrails

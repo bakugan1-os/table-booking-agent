@@ -88,6 +88,13 @@ class FakeBrain:
         return self.queue.pop(0) if self.queue else None
 
 
+async def manager_says_to(agent, text: str) -> None:
+    """One manager message through the real handler, debounce and all."""
+    await agent._on_manager(SimpleNamespace(is_private=True, raw_text=text))
+    if agent._debounce:
+        await agent._debounce
+
+
 def decision(**kw) -> Decision:
     base = dict(
         reply="Good afternoon.",
@@ -97,6 +104,7 @@ def decision(**kw) -> Decision:
         needs_operator=False,
         off_topic=False,
         requested_change="none",
+        change_value=None,
         asked_if_bot=False,
         manager_confirmed=False,
         restaurant_name=None,
@@ -428,9 +436,7 @@ async def main() -> int:
         agent._watchdog_task.cancel()
 
     async def manager_says(text: str) -> None:
-        await agent._on_manager(SimpleNamespace(is_private=True, raw_text=text))
-        if agent._debounce:
-            await agent._debounce
+        await manager_says_to(agent, text)
 
     await manager_says("This is The Ivy, Covent Garden.")
     second = client.sent[-1][1]
@@ -453,7 +459,7 @@ async def main() -> int:
     check("recap: guest name", test_facts.guest_name in final)
     check(
         "recap complete by the code's own check",
-        guardrails.recap_missing(final, test_facts, "The Ivy, Covent Garden") == [],
+        guardrails.recap_missing(final, convo12.booking(test_facts)) == [],
     )
     print("final message:", final)
 
@@ -474,6 +480,81 @@ async def main() -> int:
     check("mismatch logged", bool(mismatches))
     check("markers named in the log", "booked" in mismatches[-1] and "see you then" in mismatches[-1])
     check("logged as a warning", '"level": "warning"' in mismatches[-1])
+
+    # 19. the escalation dry run: the recap must follow what was agreed
+    #
+    # 9pm is fully booked -> the manager offers 9.30pm -> the operator says
+    # yes in Saved Messages -> the manager books it. The recap has to say
+    # 9.30pm, not the 9pm that is still sitting in facts.test.yaml.
+    agreed_facts = load_facts(ROOT / "facts.test.yaml")
+    convo14 = Conversation()
+    convo14.state = "negotiating"
+    convo14.greeted = True
+    convo14.restaurant_name = "The Ivy, Covent Garden"
+    agent, client, convo14 = build_raw(
+        [
+            decision(
+                next_state="negotiating",
+                requested_change="time",
+                change_value="21:30",
+                needs_operator=True,
+                understood="9pm is fully booked; they offer 9.30pm",
+                reply="I see, thank you.",
+            ),
+            decision(next_state="negotiating", reply="9.30pm suits us nicely, thank you."),
+            decision(next_state="done", manager_confirmed=True, reply="Thank you kindly."),
+        ],
+        convo14,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await manager_says_to(agent, "I'm afraid we're fully booked at 9pm. We could do 9.30pm?")
+    question = client.sent[-1][1]
+    check("escalated to the operator", client.sent[-1][0] == "me")
+    check("the question carries the value", "(21:30)" in question)
+    check("booking not moved before approval", convo14.agreed["time"] == "21:00")
+
+    await agent._on_saved(SimpleNamespace(id=77, raw_text="Yes, 9.30pm is fine."))
+    check("operator approval moves the booking", convo14.agreed["time"] == "21:30")
+    check("facts file untouched", agreed_facts.time == "21:00")
+
+    await manager_says_to(agent, "Booked for 9.30pm under the name Test Guest.")
+    final = client.sent[-1][1]
+    check("confirmed after the move", convo14.state == "confirmed")
+    check("recap uses the agreed time", "9.30pm" in final)
+    check("recap drops the old time", "at 9pm" not in final)
+    check("recap still complete", guardrails.recap_missing(final, convo14.booking(agreed_facts)) == [])
+    check("recap in the guest's voice", "we look forward to it" in final.lower())
+    print("agreed recap:", final)
+
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    approvals = [line for line in lines if '"change_approved"' in line]
+    check("the approved change is logged", bool(approvals))
+    check("the log says what moved", '"from": "21:00"' in approvals[-1] and '"to": "21:30"' in approvals[-1])
+
+    # 19b. without a clear yes, nothing moves
+    convo15 = Conversation()
+    convo15.state = "negotiating"
+    convo15.restaurant_name = "The Ivy"
+    agent, client, convo15 = build_raw(
+        [
+            decision(
+                next_state="negotiating",
+                requested_change="time",
+                change_value="21:30",
+                needs_operator=True,
+                reply="Let me ask.",
+            ),
+            decision(next_state="negotiating", reply="I'm afraid 9pm it must be."),
+        ],
+        convo15,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "We could do 9.30pm instead?")
+    await agent._on_saved(SimpleNamespace(id=78, raw_text="No, keep it at 9pm please."))
+    check("a no leaves the booking alone", convo15.agreed["time"] == "21:00")
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

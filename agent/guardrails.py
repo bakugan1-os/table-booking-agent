@@ -191,34 +191,83 @@ def reminder_line(facts: Facts) -> str:
     )
 
 
-def recap_line(facts: Facts, restaurant_name: str | None) -> str:
-    """The confirmation, built from the facts alone - the model never writes it.
+def recap_line(booking: Facts) -> str:
+    """The confirmation, built from the agreed booking - the model never writes it.
 
     Five fields, every time: party size, time, date, restaurant, guest name.
+    Written as the guest's side: a restaurant looks forward to *seeing you*,
+    a guest looks forward *to it*.
     """
     when = (
-        f"{facts.time_human} today, {facts.date_human}"
-        if facts.is_today()
-        else f"{facts.time_human} on {facts.date_human}"
+        f"{booking.time_human} today, {booking.date_human}"
+        if booking.is_today()
+        else f"{booking.time_human} on {booking.date_human}"
     )
-    where = f", at {restaurant_name}" if restaurant_name else ""
+    where = f", at {booking.restaurant_name}" if booking.restaurant_name else ""
     return (
-        f"Wonderful, thank you. Just to confirm: a table for {facts.party_word} "
-        f"at {when}{where}, under the name {facts.guest_name}. "
-        "We look forward to seeing you."
+        f"Wonderful, thank you. Just to confirm: a table for {booking.party_word} "
+        f"at {when}{where}, under the name {booking.guest_name}. "
+        "Many thanks, we look forward to it."
     )
 
 
-def recap_missing(text: str, facts: Facts, restaurant_name: str | None) -> list[str]:
+def recap_missing(text: str, booking: Facts) -> list[str]:
     """Which of the five fields did not make it into the message that went out."""
     expected = {
-        "party_size": facts.party_word,
-        "time": facts.time_human,
-        "date": facts.date_human,
-        "restaurant": restaurant_name or "",
-        "guest_name": facts.guest_name,
+        "party_size": booking.party_word,
+        "time": booking.time_human,
+        "date": booking.date_human,
+        "restaurant": booking.restaurant_name or "",
+        "guest_name": booking.guest_name,
     }
     return [field for field, value in expected.items() if value and value not in text]
+
+
+_APPROVES = re.compile(
+    r"\b(yes|yep|yeah|ok|okay|agreed?|approved?|go ahead|fine|do it|sure"
+    r"|accept|book it|confirm it)\b",
+    re.IGNORECASE,
+)
+_REJECTS = re.compile(
+    r"\b(no|nope|don't|do not|decline|refuse|reject|cancel|leave it)\b",
+    re.IGNORECASE,
+)
+
+
+def operator_approves(text: str) -> bool:
+    """A change is applied only on a clear yes; anything else leaves it alone."""
+    if _REJECTS.search(text or ""):
+        return False
+    return bool(_APPROVES.search(text or ""))
+
+
+def parse_clock(value: str) -> str | None:
+    """'9.30pm', '9:30 pm', '21:30' -> '21:30'. None if there is no time in it."""
+    match = _AMPM.search(value or "")
+    if match:
+        hour = int(match.group(1)) % 12
+        minute = int(match.group(2) or 0)
+        if match.group(3).lower() == "p":
+            hour += 12
+        return f"{hour:02d}:{minute:02d}"
+    match = _24H.search(value or "")
+    if match:
+        return f"{int(match.group(1)):02d}:{int(match.group(2)):02d}"
+    return None
+
+
+def parse_party_size(value: str) -> int | None:
+    match = re.search(r"\b(\d{1,2})\b", value or "")
+    if match:
+        size = int(match.group(1))
+        return size if 1 <= size <= 30 else None
+    for word, size in {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }.items():
+        if re.search(rf"\b{word}\b", value or "", re.IGNORECASE):
+            return size
+    return None
 
 
 # Markers that a booking was actually made, used only to flag a disagreement

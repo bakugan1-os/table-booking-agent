@@ -11,6 +11,7 @@ import inspect
 import re
 import sys
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -151,7 +152,8 @@ check(
 )
 print("sanitized:", clean)
 
-recap = guardrails.recap_line(facts, "The Ivy, Covent Garden")
+booked = replace(facts, restaurant_name="The Ivy, Covent Garden")
+recap = guardrails.recap_line(booked)
 check("recap has party size", "two" in recap)
 check("recap has the time", facts.time_human in recap)
 check("recap has the date", facts.date_human in recap)
@@ -160,17 +162,25 @@ check("recap has the guest name", facts.guest_name in recap)
 check("recap says today when it is today", "today" in recap)
 check("recap says 'under the name'", f"under the name {facts.guest_name}" in recap)
 check("recap <= 3 sentences", recap.count(". ") <= 2)
-check("recap is complete", guardrails.recap_missing(recap, facts, "The Ivy, Covent Garden") == [])
+check("recap is complete", guardrails.recap_missing(recap, booked) == [])
 check(
     "recap_missing names what is absent",
-    set(guardrails.recap_missing("Thank you, looking forward to it.", facts, "The Ivy"))
+    set(guardrails.recap_missing("Thank you, looking forward to it.", booked))
     == {"party_size", "time", "date", "restaurant", "guest_name"},
 )
 check(
     "recap_missing spots one gap",
-    guardrails.recap_missing(recap, facts, "Some Other Place") == ["restaurant"],
+    guardrails.recap_missing(recap, replace(booked, restaurant_name="Some Other Place"))
+    == ["restaurant"],
 )
-check("recap survives an unknown name", "at " in guardrails.recap_line(facts, None))
+check("recap survives an unknown name", "at " in guardrails.recap_line(replace(facts, restaurant_name=None)))
+# the agent speaks for the guest, not for the restaurant
+check("recap is in the guest's voice", "we look forward to it" in recap.lower())
+check("recap does not greet as the restaurant", "seeing you" not in recap.lower())
+check(
+    "recap follows the agreed time, not the facts file",
+    "9.30pm" in guardrails.recap_line(replace(booked, time="21:30")),
+)
 print("recap:", recap)
 
 # markers of an actual booking: logged as a disagreement, never acted on
@@ -280,6 +290,20 @@ check("not a bot question", not guardrails.asks_if_bot("is the table by the wind
 check("off-topic line mentions time", "5pm" in guardrails.off_topic_line(facts))
 check("disclosure is honest", "AI assistant" in guardrails.bot_disclosure_line(facts))
 
+# none of the fixed lines may speak as though we worked at the restaurant
+RESTAURANT_VOICE = ("seeing you", "we have a table", "our kitchen", "our tables", "your table is ready")
+for label, line in (
+    ("holding", guardrails.holding_line()),
+    ("off topic", guardrails.off_topic_line(facts)),
+    ("disclosure", guardrails.bot_disclosure_line(facts)),
+    ("reminder", guardrails.reminder_line(facts)),
+    ("recap", recap),
+):
+    check(
+        f"{label} line stays on the guest's side",
+        not any(phrase in line.lower() for phrase in RESTAURANT_VOICE),
+    )
+
 # --- 5. state machine -------------------------------------------------------
 
 c = Conversation()
@@ -321,6 +345,47 @@ check("done blocked outside confirmed", c.next_state("done", restaurant_known=Tr
 c.state = "confirmed"
 check("done allowed from confirmed", c.next_state("done", restaurant_known=True) == "done")
 check("garbage state ignored", c.next_state("banana", restaurant_known=True) == "confirmed")
+
+# --- 5b. the agreed booking -------------------------------------------------
+
+check("approval: yes", guardrails.operator_approves("yes, go ahead"))
+check("approval: ok", guardrails.operator_approves("ok"))
+check("approval: agreed", guardrails.operator_approves("Agreed, book it."))
+check("rejection: no", not guardrails.operator_approves("no, keep 9pm"))
+check("rejection wins over yes", not guardrails.operator_approves("yes but no, decline it"))
+check("silence is not approval", not guardrails.operator_approves("hmm"))
+check("a question is not approval", not guardrails.operator_approves("what did they say?"))
+
+check("clock: 24h", guardrails.parse_clock("21:30") == "21:30")
+check("clock: british", guardrails.parse_clock("9.30pm") == "21:30")
+check("clock: spaced", guardrails.parse_clock("9:30 pm") == "21:30")
+check("clock: on the hour", guardrails.parse_clock("8pm") == "20:00")
+check("clock: morning", guardrails.parse_clock("11am") == "11:00")
+check("clock: nothing there", guardrails.parse_clock("sometime later") is None)
+check("party: digits", guardrails.parse_party_size("4") == 4)
+check("party: words", guardrails.parse_party_size("four guests") == 4)
+check("party: nonsense", guardrails.parse_party_size("a few") is None)
+
+agreed = Conversation()
+agreed.ensure_agreed(facts)
+check("agreed seeded from facts", agreed.agreed["time"] == facts.time)
+check("agreed seeds the guest name", agreed.agreed["guest_name"] == facts.guest_name)
+check("agreed starts without a restaurant", agreed.restaurant_name is None)
+agreed.restaurant_name = "The Ivy"
+check("restaurant lands in agreed", agreed.agreed["restaurant_name"] == "The Ivy")
+before, after = agreed.agree("time", "21:30")
+check("agree returns the move", (before, after) == (facts.time, "21:30"))
+moved = agreed.booking(facts)
+check("booking follows the agreed time", moved.time_human == "9.30pm")
+check("booking keeps the rest", moved.party_size == facts.party_size and moved.guest_name == facts.guest_name)
+check("facts themselves are untouched", facts.time == "17:00")
+agreed.agree("party_size", 4)
+check("booking follows the agreed party", agreed.booking(facts).party_word == "four")
+roundtrip = TMP / "agreed.json"
+agreed.save(roundtrip)
+restored = Conversation.load(roundtrip)
+check("agreed survives a restart", restored is not None and restored.agreed["time"] == "21:30")
+check("restaurant survives a restart", restored is not None and restored.restaurant_name == "The Ivy")
 
 # --- 6. persistence ---------------------------------------------------------
 
@@ -391,6 +456,9 @@ check(
 )
 check("prompt bans 24h times", "Never 21:00" in prompt)
 check("prompt asks for 'under the name'", f"under the name {facts.guest_name}" in prompt)
+check("prompt fixes the agent's side", "on the guest's side" in prompt)
+check("prompt warns off the restaurant's voice", "we look forward to seeing you" in prompt)
+check("prompt documents change_value", '"change_value"' in prompt)
 check("prompt orders the opening", "Say what you want first, ask second" in prompt)
 check(
     "opening instruction asks the name last",

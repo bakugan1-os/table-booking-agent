@@ -25,6 +25,7 @@ class Decision:
     needs_operator: bool
     off_topic: bool
     requested_change: str
+    change_value: str | None
     asked_if_bot: bool
     manager_confirmed: bool
     restaurant_name: str | None
@@ -37,6 +38,7 @@ class Decision:
             "needs_operator": self.needs_operator,
             "off_topic": self.off_topic,
             "requested_change": self.requested_change,
+            "change_value": self.change_value,
             "asked_if_bot": self.asked_if_bot,
             "manager_confirmed": self.manager_confirmed,
         }
@@ -97,6 +99,10 @@ def _validate(data: dict | None) -> tuple[Decision | None, str]:
     if change not in CHANGES:
         change = "none"
 
+    raw_value = data.get("change_value")
+    value = str(raw_value).strip() if raw_value is not None else ""
+    change_value = value[:40] if value and value.lower() not in _NULLISH else None
+
     raw_name = data.get("restaurant_name")
     name = str(raw_name).strip() if raw_name else ""
     restaurant_name = name[:80] if name.lower() not in _NULLISH else None
@@ -110,6 +116,7 @@ def _validate(data: dict | None) -> tuple[Decision | None, str]:
             needs_operator=_as_bool(data.get("needs_operator")),
             off_topic=_as_bool(data.get("off_topic")),
             requested_change=change,
+            change_value=change_value,
             asked_if_bot=_as_bool(data.get("asked_if_bot")),
             manager_confirmed=_as_bool(data.get("manager_confirmed")),
             restaurant_name=restaurant_name,
