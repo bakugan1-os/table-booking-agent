@@ -464,6 +464,12 @@ check("party: digits", guardrails.parse_party_size("4") == 4)
 check("party: words", guardrails.parse_party_size("four guests") == 4)
 check("party: nonsense", guardrails.parse_party_size("a few") is None)
 
+# naming one of the offered options is an approval of that option
+check("the operator names a time", guardrails.value_in_reply("time", "6 pm") == "18:00")
+check("or a party size", guardrails.value_in_reply("party_size", "давай 4") == 4)
+check("a bare yes names nothing", guardrails.value_in_reply("time", "yes") is None)
+check("and deposits have no value to name", guardrails.value_in_reply("deposit", "6 pm") is None)
+
 # nothing may be offered to the manager that is not in the agreed booking
 at_nine = replace(facts, time="21:00", restaurant_name="The Ivy")
 check("agreed time passes", guardrails.conflicting_values("a table at 9pm?", at_nine) == [])

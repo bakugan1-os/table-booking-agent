@@ -429,6 +429,19 @@ def clarify_line(topic: str, value: str | None) -> str:
     return f"Sorry, is that a yes to {pretty}? Please reply yes or no."
 
 
+def value_in_reply(topic: str, text: str):
+    """A concrete value in the operator's answer, when they named one.
+
+    "6 pm" to a choice of 6pm or 4pm is an approval of 6pm, without a
+    separate yes.
+    """
+    if topic == "time":
+        return parse_clock(text)
+    if topic == "party_size":
+        return parse_party_size(text)
+    return None
+
+
 def parse_party_size(value: str) -> int | None:
     match = re.search(r"\b(\d{1,2})\b", value or "")
     if match:

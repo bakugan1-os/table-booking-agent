@@ -158,11 +158,15 @@ checks by name.
    is not a booking - and entering it sends a recap built in code, carrying
    all five fields: party size, time, date, restaurant, guest name. The model
    never writes that message and cannot skip it.
-4. A final no from the restaurant also ends the conversation: `done` with
+4. If an approved change arrives after the booking was confirmed - the
+   restaurant rings back to move the time - the booking reopens
+   (`negotiating`, outcome cleared, `booking_reopened` in the journal) and
+   the manager's fresh yes produces a fresh recap with the new terms.
+5. A final no from the restaurant also ends the conversation: `done` with
    `outcome: "no_booking"` in `state.json`, against `"booked"` for a table
    secured. Either way a `booking_outcome` line lands in the journal.
-5. In `done` the agent still answers the manager, briefly and politely.
-6. After 10 minutes of silence it sends **one** polite nudge, never more.
+6. In `done` the agent still answers the manager, briefly and politely.
+7. After 10 minutes of silence it sends **one** polite nudge, never more.
 
 ## Voice notes
 
@@ -218,8 +222,9 @@ Reply in this chat and I will carry on.
 ```
 
 Reply in Saved Messages and it continues immediately. Answer **yes** or
-**no** (English, Ukrainian or Russian); anything it cannot read as either
-gets one question back - "Sorry, is that a yes to 9.30pm?" - and the agent
+**no** (English, Ukrainian or Russian), or just name the option you want -
+"6 pm" to a choice of 6pm or 4pm approves 6pm. Anything it cannot read as
+either gets one question back - "Sorry, is that a yes to 9.30pm?" - and the agent
 keeps waiting rather than guessing. A clear **yes** moves
 the agreed booking (and only then): the new time or party size is written to
 `state.json` and journalled as `change_approved`, and every later message -

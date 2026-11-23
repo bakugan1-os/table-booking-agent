@@ -1,4 +1,4 @@
-"""Turn-by-turn checks against a stub Telegram client and a stub LLM.
+﻿"""Turn-by-turn checks against a stub Telegram client and a stub LLM.
 
 No network and no Telegram account needed. Plain script, no pytest:
 
@@ -1236,6 +1236,91 @@ async def main() -> int:
         await agent._debounce
     check("a heard name is still checked", "make sure I have it right" in client.sent[-1][1])
     check("and no recap yet", convo42.state == "negotiating")
+
+    # 27. the booking is moved after it was already confirmed
+    #
+    # Live run: confirmed at 5pm, then "5pm is full, 6pm or 4pm?", the
+    # operator answered "6 pm", the change was applied - and the state
+    # stayed confirmed, so the last recap in the chat still said 5pm.
+    convo43 = Conversation()
+    convo43.state = "confirmed"
+    convo43.outcome = "booked"
+    convo43.restaurant_name = "The Ivy"
+    convo43.greeted = True
+    agent, client, convo43 = build_raw(
+        [
+            decision(
+                requested_change="time",
+                change_value="18:00 or 16:00",
+                needs_operator=True,
+                understood="5pm is full; they offer 6pm or 4pm",
+                reply="I see.",
+            ),
+            decision(reply="6pm would suit us nicely - could you move it, please?"),
+            decision(next_state="confirmed", manager_confirmed=True, reply="Thank you."),
+        ],
+        convo43,
+        facts=FACTS,  # the 5pm facts file
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    check("starting from a 5pm booking", convo43.booking(FACTS).time_human == "5pm")
+
+    await manager_says_to(agent, "I'm afraid 5pm is full now. We could do 6pm or 4pm?")
+    check("it goes to the operator", client.sent[-1][0] == "me")
+    check("with both options", "18:00 or 16:00" in client.sent[-1][1])
+
+    # the operator names one of them, without a separate yes
+    await agent._on_saved(SimpleNamespace(id=950, raw_text="6 pm"))
+    check("naming an option approves it", convo43.agreed["time"] == "18:00")
+    check("the booking is reopened", convo43.state == "negotiating")
+    check("and the outcome is cleared", convo43.outcome is None)
+    moved = client.sent[-1][1]
+    check("the agent answers the manager", client.sent[-1][0] == "MANAGER")
+    check("asking for the new time", "6pm" in moved)
+    check("and never the old one", "5pm" not in moved)
+
+    await manager_says_to(agent, "Yes, I confirm.")
+    final = client.sent[-1][1]
+    check("a fresh recap goes out", "Just to confirm" in final)
+    check("with the new time", "6pm" in final)
+    check("and not a word of 5pm", "5pm" not in final)
+    check("confirmed again", convo43.state == "confirmed")
+    check("and the outcome is back", convo43.outcome == "booked")
+    check(
+        "nothing after the move mentions 5pm",
+        all("5pm" not in text for _, text in client.sent[2:]),
+    )
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    check("the reopening is journalled", any('"booking_reopened"' in line for line in lines))
+    check(
+        "the operator's own choice is noted",
+        any('"chosen_by_operator": true' in line for line in lines),
+    )
+
+    # 27b. a plain "no" still changes nothing
+    convo44 = Conversation()
+    convo44.state = "confirmed"
+    convo44.outcome = "booked"
+    convo44.restaurant_name = "The Ivy"
+    agent, client, convo44 = build_raw(
+        [
+            decision(
+                requested_change="time",
+                change_value="18:00",
+                needs_operator=True,
+                reply="I see.",
+            ),
+            decision(reply="I'm afraid we must keep to 5pm."),
+        ],
+        convo44,
+        facts=FACTS,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "Could we move you to 6pm?")
+    await agent._on_saved(SimpleNamespace(id=951, raw_text="no, keep 5pm"))
+    check("a refusal leaves the time alone", convo44.agreed["time"] == "17:00")
+    check("and the booking stays confirmed", convo44.state == "confirmed")
+    check("with its outcome", convo44.outcome == "booked")
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

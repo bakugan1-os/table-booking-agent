@@ -126,6 +126,22 @@ booking "confirmed" at a different time escalates instead of being read back
 wrongly. The prompt says the same thing in words, but the prompt is not where
 this is enforced.
 
+**A confirmed booking can be reopened.** The live run was confirmed at 5pm,
+then the manager rang back: 5pm is full, 6pm or 4pm? The operator approved
+6pm, the agreed time moved - and the state stayed `confirmed`, because
+transitions only go forward, so the last recap in the chat still said 5pm.
+Now an approved change of time or party size while the booking is
+`confirmed` or `done` puts it back into `negotiating`, clears `outcome` and
+journals `booking_reopened`; the topic also leaves `resolved_changes`, since
+the value moved and may move again. The manager's fresh yes then produces a
+fresh recap with the new terms and a new `booking_outcome`.
+
+**Naming an option is approving it.** Asked to choose between 6pm and 4pm,
+the operator answers "6 pm", not "yes" - and the old code filed that as
+unclear. A reply that contains a concrete value for the pending topic is
+taken as approval of that value, and it wins over whatever the manager
+proposed. A rejection anywhere in the reply still wins over both.
+
 **Every conversation ends somewhere.** `manager_refused` in the contract
 closes the conversation from wherever it is: a final no ends in `done` with
 `outcome: "no_booking"`, a confirmation ends in `confirmed` with

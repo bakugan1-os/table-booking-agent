@@ -222,14 +222,16 @@ class BookingAgent:
         topic = self.convo.pending_topic
         if topic and topic not in ("other", "secret", "invalid_output"):
             verdict = guardrails.operator_verdict(text)
-            if verdict == "unclear":
+            # Naming one of the options is an approval of that option.
+            chosen = None if verdict == "no" else guardrails.value_in_reply(topic, text)
+            if verdict == "unclear" and chosen is None:
                 # Never guess what the operator meant: ask again and keep waiting.
                 await self._ask_operator_again(topic)
                 return
             if topic not in self.convo.resolved_changes:
                 self.convo.resolved_changes.append(topic)
-            if verdict == "yes":
-                self._apply_approved_change(topic, text)
+            if verdict == "yes" or chosen is not None:
+                self._apply_approved_change(topic, text, chosen)
             else:
                 self.convo.add(
                     ROLE_OPERATOR,
@@ -283,9 +285,13 @@ class BookingAgent:
         )
         print(f"Operator's answer was unclear; asked again about {topic}.")
 
-    def _apply_approved_change(self, topic: str, operator_text: str) -> None:
-        """The agreed booking moves only here, and only on a clear yes."""
-        value = self.convo.pending_change_value
+    def _apply_approved_change(self, topic: str, operator_text: str, chosen=None) -> None:
+        """The agreed booking moves only here, and only on a clear approval.
+
+        `chosen` is a value the operator named themselves, which wins over
+        whatever the manager proposed.
+        """
+        value = str(chosen) if chosen is not None else self.convo.pending_change_value
         if not value:
             self.journal.write(
                 "change_not_applied", topic=topic, reason="no value to apply"
@@ -293,10 +299,10 @@ class BookingAgent:
             return
 
         if topic == "time":
-            parsed = guardrails.parse_clock(value)
+            parsed = chosen if chosen is not None else guardrails.parse_clock(value)
             key = "time"
         elif topic == "party_size":
-            parsed = guardrails.parse_party_size(value)
+            parsed = chosen if chosen is not None else guardrails.parse_party_size(value)
             key = "party_size"
         else:  # deposit, payment: nothing in the booking itself moves
             self.journal.write("change_approved", topic=topic, value=value)
@@ -328,8 +334,26 @@ class BookingAgent:
             field=key,
             **{"from": before, "to": after},
             operator=operator_text,
+            chosen_by_operator=chosen is not None or None,
         )
         print(f"Operator approved a change: {key} {before} -> {after}.")
+
+        # The value moved, so the same topic may legitimately come up again.
+        if topic in self.convo.resolved_changes:
+            self.convo.resolved_changes.remove(topic)
+
+        # A booking that was already confirmed is now out of date: the
+        # manager has to agree to the new terms, and the recap must run
+        # again with them.
+        if self.convo.state in ("confirmed", "done"):
+            previous, self.convo.state = self.convo.state, "negotiating"
+            self.convo.outcome = None
+            self.journal.write(
+                "booking_reopened",
+                reason=f"{key} changed to {after}",
+                **{"from": previous, "to": "negotiating"},
+            )
+            print(f"Booking reopened: {key} is now {after}, awaiting a fresh yes.")
 
     def _record_outcome(self, new_state: str, decision: Decision, last_manager: str) -> None:
         """Write down how this ended, once, the first time we know."""
