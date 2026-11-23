@@ -27,7 +27,7 @@ from agent.config import (  # noqa: E402
     start_guard,
 )
 from agent.llm import _extract_json, _validate  # noqa: E402
-from agent.prompts import build_system_prompt  # noqa: E402
+from agent.prompts import OPEN_CONVERSATION, build_system_prompt  # noqa: E402
 from agent.state import Conversation  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="booking-tests-"))
@@ -151,11 +151,55 @@ check(
 )
 print("sanitized:", clean)
 
-check("recap has party size", "two people" in guardrails.recap_line(facts, "The Ivy"))
-check("recap names restaurant", "The Ivy" in guardrails.recap_line(facts, "The Ivy"))
-check("recap survives unknown name", "at " in guardrails.recap_line(facts, None))
-check("recap <= 3 sentences", guardrails.recap_line(facts, "The Ivy").count(". ") <= 2)
-print("recap:", guardrails.recap_line(facts, "The Ivy"))
+recap = guardrails.recap_line(facts, "The Ivy, Covent Garden")
+check("recap has party size", "two" in recap)
+check("recap has the time", facts.time_human in recap)
+check("recap has the date", facts.date_human in recap)
+check("recap names the restaurant", "The Ivy, Covent Garden" in recap)
+check("recap has the guest name", facts.guest_name in recap)
+check("recap says today when it is today", "today" in recap)
+check("recap says 'under the name'", f"under the name {facts.guest_name}" in recap)
+check("recap <= 3 sentences", recap.count(". ") <= 2)
+check("recap is complete", guardrails.recap_missing(recap, facts, "The Ivy, Covent Garden") == [])
+check(
+    "recap_missing names what is absent",
+    set(guardrails.recap_missing("Thank you, looking forward to it.", facts, "The Ivy"))
+    == {"party_size", "time", "date", "restaurant", "guest_name"},
+)
+check(
+    "recap_missing spots one gap",
+    guardrails.recap_missing(recap, facts, "Some Other Place") == ["restaurant"],
+)
+check("recap survives an unknown name", "at " in guardrails.recap_line(facts, None))
+print("recap:", recap)
+
+# markers of an actual booking: logged as a disagreement, never acted on
+check("marker: reserved", guardrails.confirmation_markers("that's reserved under your name") == ["reserved"])
+check("marker: booked", "booked" in guardrails.confirmation_markers("All booked!"))
+check("marker: see you then", "see you then" in guardrails.confirmation_markers("Lovely, see you then."))
+check("marker: confirmed", "confirmed" in guardrails.confirmation_markers("You are confirmed."))
+check("no marker on availability", guardrails.confirmation_markers("Yes, we have a table for two at 9pm.") == [])
+check("no marker on a question", guardrails.confirmation_markers("How many guests?") == [])
+
+# "under X's name" -> "under the name X"
+check(
+    "possessive rewritten",
+    guardrails.fix_possessive("Please reserve it under Test Guest's name.")
+    == "Please reserve it under the name Test Guest.",
+)
+check(
+    "curly apostrophe too",
+    guardrails.fix_possessive("confirm it under Test Guest’s name?")
+    == "confirm it under the name Test Guest?",
+)
+check(
+    "'in X's name' too",
+    "under the name Oliver Hart" in guardrails.fix_possessive("booked in Oliver Hart's name"),
+)
+check(
+    "plain sentences untouched",
+    guardrails.fix_possessive("under the name Test Guest") == "under the name Test Guest",
+)
 
 # the salutation follows London's clock, not the model's mood
 LONDON = ZoneInfo("Europe/London")
@@ -206,6 +250,12 @@ check("9:00 pm is not 9am", guardrails.normalise_times("at 9:00 pm") == "at 9pm"
 check("half past kept", guardrails.normalise_times("at 7:30pm") == "at 7.30pm")
 check("midnight", guardrails.normalise_times("at 00:30") == "at 12.30am")
 check("dates untouched", guardrails.normalise_times("on Monday 23 November") == "on Monday 23 November")
+# a bare "9:30" for an evening booking must not become half past nine in the morning
+check("bare time follows the booking", guardrails.normalise_times("at 9:30", "21:30") == "at 9.30pm")
+check("bare time, exact hour", guardrails.normalise_times("at 9:00", "21:00") == "at 9pm")
+check("leading zero stays morning", guardrails.normalise_times("at 09:00", "21:00") == "at 9am")
+check("a different time is literal", guardrails.normalise_times("at 8:00", "21:00") == "at 8am")
+check("no hint, no guessing", guardrails.normalise_times("at 9:30") == "at 9.30am")
 check("party size untouched", guardrails.normalise_times("a table for 2") == "a table for 2")
 check(
     "sanitize normalises the wire",
@@ -252,6 +302,21 @@ check(
     "manager_confirmed defaults to false",
     c.next_state("confirmed", restaurant_known=True) == "negotiating",
 )
+# the dry-run bug: the model jumped straight to done and the recap was lost
+check(
+    "a booking routes through confirmed",
+    c.next_state("done", restaurant_known=True, manager_confirmed=True) == "confirmed",
+)
+c.state = "negotiating"
+check(
+    "from negotiating too",
+    c.next_state("done", restaurant_known=True, manager_confirmed=True) == "confirmed",
+)
+check(
+    "no shortcut without the restaurant",
+    c.next_state("done", restaurant_known=False, manager_confirmed=True) == "negotiating",
+)
+c.state = "requesting"
 check("done blocked outside confirmed", c.next_state("done", restaurant_known=True) == "requesting")
 c.state = "confirmed"
 check("done allowed from confirmed", c.next_state("done", restaurant_known=True) == "done")
@@ -325,6 +390,12 @@ check(
     'greet with "Good morning"' in build_system_prompt(facts, "greeting", None, "morning"),
 )
 check("prompt bans 24h times", "Never 21:00" in prompt)
+check("prompt asks for 'under the name'", f"under the name {facts.guest_name}" in prompt)
+check("prompt orders the opening", "Say what you want first, ask second" in prompt)
+check(
+    "opening instruction asks the name last",
+    OPEN_CONVERSATION.index("party size") < OPEN_CONVERSATION.index("which restaurant"),
+)
 check("prompt carries a known restaurant", "The Ivy" in build_system_prompt(facts, "negotiating", "The Ivy"))
 
 # --- 9. every Telethon coroutine call is awaited ----------------------------

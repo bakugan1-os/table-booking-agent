@@ -189,6 +189,18 @@ class BookingAgent:
             if decision.restaurant_name and not self.convo.restaurant_name:
                 self.convo.restaurant_name = decision.restaurant_name
 
+            # Flag a disagreement for the log; never overrule the model here.
+            markers = guardrails.confirmation_markers(last_manager)
+            if markers and not decision.manager_confirmed:
+                self.journal.write(
+                    "confirmation_mismatch",
+                    level="warning",
+                    markers=markers,
+                    text=last_manager,
+                    state=self.convo.state,
+                    understood=decision.understood,
+                )
+
             secret = guardrails.asks_for_secrets(last_manager)
             payment = guardrails.mentions_payment(last_manager) and not (
                 {"deposit", "payment"} & set(self.convo.resolved_changes)
@@ -234,13 +246,22 @@ class BookingAgent:
                 restaurant_known=bool(self.convo.restaurant_name),
                 manager_confirmed=decision.manager_confirmed,
             )
-            if new_state == "confirmed" and self.convo.state != "confirmed":
+            recap = new_state == "confirmed" and self.convo.state != "confirmed"
+            if recap:
                 reply = guardrails.recap_line(self.facts, self.convo.restaurant_name)
+                missing = guardrails.recap_missing(
+                    reply, self.facts, self.convo.restaurant_name
+                )
+                if missing:
+                    self.journal.write(
+                        "recap_incomplete", level="warning", missing=missing, text=reply
+                    )
             else:
                 reply = guardrails.sanitize(
                     decision.reply,
                     allow_phone=self.convo.phone_requested,
                     greeting=greeting,
+                    booking=self.facts.time,
                 )
 
             if not reply:
@@ -253,7 +274,12 @@ class BookingAgent:
                 )
                 return
 
-            await self._send(reply, decision=decision, new_state=new_state)
+            await self._send(
+                reply,
+                decision=decision,
+                new_state=new_state,
+                note="recap" if recap else None,
+            )
 
     # --- outgoing --------------------------------------------------------
 

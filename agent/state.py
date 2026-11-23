@@ -71,6 +71,14 @@ class Conversation:
         saying the booking is made - a free table is not a booking. 'done' is
         only reachable from 'confirmed'.
         """
+        # A confirmed booking always goes through 'confirmed', whatever the
+        # model proposed: skipping straight to 'done' would swallow the recap.
+        if (
+            manager_confirmed
+            and restaurant_known
+            and _ORDER[self.state] < _ORDER["confirmed"]
+        ):
+            return "confirmed"
         if proposed not in _ORDER:
             return self.state
         if _ORDER[proposed] <= _ORDER[self.state]:

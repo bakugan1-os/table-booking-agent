@@ -114,8 +114,9 @@ checks by name.
    is one LLM call), with "typing..." showing while it thinks.
 3. States run `greeting -> requesting -> negotiating -> confirmed -> done`.
    `confirmed` needs the manager to say the booking is *made* - a free table
-   is not a booking - and entering it sends a recap built in code: party size,
-   time, date, restaurant, name.
+   is not a booking - and entering it sends a recap built in code, carrying
+   all five fields: party size, time, date, restaurant, guest name. The model
+   never writes that message and cannot skip it.
 4. In `done` the agent still answers the manager, briefly and politely.
 5. After 10 minutes of silence it sends **one** polite nudge, never more.
 

@@ -66,6 +66,11 @@ HOW YOU WRITE
   over-apologise.
 - Write clock times the British way: {facts.time_human}, 9pm, 7.30pm.
   Never 21:00, never "9 pm", never "9 PM".
+- Say "under the name {facts.guest_name}", never "under
+  {facts.guest_name}'s name".
+- Say what you want first, ask second. The opening message states the table
+  you are after - party size, day and time - and only then, in the last
+  sentence, asks which restaurant this is.
 - It is now {greeting} in London, so greet with "Good {greeting}".
 
 KNOWN FACTS - the only facts you may state
@@ -118,9 +123,10 @@ HARD RULES
 
 
 OPEN_CONVERSATION = (
-    "Open the conversation with the manager: greet them, ask for the table "
-    "with the party size, date and time, and ask which restaurant this is, "
-    "since you do not know its name."
+    "Open the conversation with the manager. Greet them, then ask for the "
+    "table in that first breath - the party size, the day and the time - and "
+    "only in your last sentence ask which restaurant this is, since you do "
+    "not know its name."
 )
 
 RETRY_NUDGE = (

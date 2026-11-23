@@ -79,8 +79,16 @@ def _british(hour: int, minute: int) -> str:
     return human_time(f"{hour % 24:02d}:{minute:02d}")
 
 
-def normalise_times(text: str) -> str:
-    """One house style for clock times: 9pm, 5pm, 9.30pm - never 21:00."""
+def normalise_times(text: str, booking: str | None = None) -> str:
+    """One house style for clock times: 9pm, 5pm, 9.30pm - never 21:00.
+
+    `booking` is the facts' own time ("21:00"). A bare "9:30" with no am/pm
+    and no leading zero is read as the booking's half of the day, so an
+    evening table never comes out as 9.30am.
+    """
+    booked_hour = booked_minute = None
+    if booking:
+        booked_hour, booked_minute = (int(part) for part in booking.split(":"))
 
     def from_ampm(match: re.Match) -> str:
         hour = int(match.group(1)) % 12
@@ -90,9 +98,28 @@ def normalise_times(text: str) -> str:
         return _british(hour, minute)
 
     def from_24h(match: re.Match) -> str:
-        return _british(int(match.group(1)), int(match.group(2)))
+        raw_hour, hour, minute = match.group(1), int(match.group(1)), int(match.group(2))
+        ambiguous = hour <= 12 and not raw_hour.startswith("0")
+        if (
+            ambiguous
+            and booked_hour is not None
+            and (hour % 12, minute) == (booked_hour % 12, booked_minute)
+        ):
+            hour = booked_hour
+        return _british(hour, minute)
 
     return _24H.sub(from_24h, _AMPM.sub(from_ampm, text))
+
+
+# "under Test Guest's name" reads like a form; "under the name Test Guest"
+# is how a person says it.
+_POSSESSIVE = re.compile(
+    r"\b(?:under|in)\s+((?:[A-Z][\w.-]*)(?:\s+[A-Z][\w.-]*)*)['’]s\s+name\b"
+)
+
+
+def fix_possessive(text: str) -> str:
+    return _POSSESSIVE.sub(lambda m: f"under the name {m.group(1)}", text)
 
 
 def fix_salutation(text: str, word: str) -> str:
@@ -100,12 +127,19 @@ def fix_salutation(text: str, word: str) -> str:
     return _SALUTATION.sub(lambda m: f"{m.group(1)}Good {word}", text, count=1)
 
 
-def sanitize(reply: str, *, allow_phone: bool, greeting: str | None = None) -> str:
+def sanitize(
+    reply: str,
+    *,
+    allow_phone: bool,
+    greeting: str | None = None,
+    booking: str | None = None,
+) -> str:
     """Strip links, markup and emoji; fix the time and the salutation; cap length."""
     text = _URL.sub("", reply or "")
     text = _EMOJI.sub("", text)
     text = _MARKDOWN.sub("", text)
-    text = normalise_times(text)
+    text = normalise_times(text, booking)
+    text = fix_possessive(text)
     if greeting:
         text = fix_salutation(text, greeting)
     text = re.sub(r"\s+", " ", text).strip()
@@ -158,10 +192,43 @@ def reminder_line(facts: Facts) -> str:
 
 
 def recap_line(facts: Facts, restaurant_name: str | None) -> str:
-    """Deterministic confirmation: time, date, party size, restaurant."""
-    where = f" at {restaurant_name}" if restaurant_name else ""
-    return (
-        "Lovely, thank you very much. Just to confirm: a table for "
-        f"{facts.party_human} at {facts.time_human} on {facts.date_human}{where}, "
-        f"under the name {facts.guest_name}. We look forward to it."
+    """The confirmation, built from the facts alone - the model never writes it.
+
+    Five fields, every time: party size, time, date, restaurant, guest name.
+    """
+    when = (
+        f"{facts.time_human} today, {facts.date_human}"
+        if facts.is_today()
+        else f"{facts.time_human} on {facts.date_human}"
     )
+    where = f", at {restaurant_name}" if restaurant_name else ""
+    return (
+        f"Wonderful, thank you. Just to confirm: a table for {facts.party_word} "
+        f"at {when}{where}, under the name {facts.guest_name}. "
+        "We look forward to seeing you."
+    )
+
+
+def recap_missing(text: str, facts: Facts, restaurant_name: str | None) -> list[str]:
+    """Which of the five fields did not make it into the message that went out."""
+    expected = {
+        "party_size": facts.party_word,
+        "time": facts.time_human,
+        "date": facts.date_human,
+        "restaurant": restaurant_name or "",
+        "guest_name": facts.guest_name,
+    }
+    return [field for field, value in expected.items() if value and value not in text]
+
+
+# Markers that a booking was actually made, used only to flag a disagreement
+# with the model - never to overrule it.
+_CONFIRMATION = re.compile(
+    r"\b(reserved|booked|booking is (?:made|confirmed)|confirmed|that's done"
+    r"|that is done|all set|see you then|see you (?:at|on))\b",
+    re.IGNORECASE,
+)
+
+
+def confirmation_markers(text: str) -> list[str]:
+    return sorted({m.group(0).lower() for m in _CONFIRMATION.finditer(text or "")})

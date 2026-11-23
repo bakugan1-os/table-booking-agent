@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import conversation as conv_mod  # noqa: E402
+from agent import guardrails  # noqa: E402
 from agent.config import greeting_word, load_facts  # noqa: E402
 from agent.conversation import BookingAgent  # noqa: E402
 from agent.journal import Journal  # noqa: E402
@@ -110,14 +111,14 @@ FACTS = load_facts(
 JOURNAL = Journal(TMP / "logs" / "decisions.jsonl")
 
 
-def build_raw(decisions, convo: Conversation | None = None):
+def build_raw(decisions, convo: Conversation | None = None, facts=None):
     """An agent that has not been started yet, as main.py would hand it over."""
     client = FakeClient()
     convo = convo or Conversation()
     agent = BookingAgent(
         client,
         SimpleNamespace(manager_username="manager"),
-        FACTS,
+        facts or FACTS,
         convo,
         FakeBrain(decisions),
         JOURNAL,
@@ -248,7 +249,7 @@ async def main() -> int:
     )
     await agent._respond()
     body = client.sent[0][1]
-    check("recap has party size", "two people" in body)
+    check("recap has party size", "a table for two" in body)
     check("recap has the time", "5pm" in body)
     check("recap has the date", FACTS.date_human in body)
     check("recap has the restaurant", "The Ivy" in body)
@@ -393,6 +394,86 @@ async def main() -> int:
             not inspect.iscoroutinefunction(getattr(FakeClient, name))
             and not inspect.iscoroutinefunction(getattr(TelegramClient, name)),
         )
+
+    # 18. the dry run that lost its recap, replayed end to end
+    #
+    # Three manager replies, and the model's last decision proposes "done"
+    # with manager_confirmed true - exactly what the journal recorded.
+    conv_mod.DEBOUNCE_SECONDS = 0
+    test_facts = load_facts(ROOT / "facts.test.yaml")
+    agent, client, convo12 = build_raw(
+        [
+            decision(
+                next_state="requesting",
+                reply=(
+                    "Good evening, I would like to book a table for two at 9pm on "
+                    "Monday 23 November. Could you let me know the name of your restaurant?"
+                ),
+            ),
+            decision(
+                next_state="negotiating",
+                restaurant_name="The Ivy, Covent Garden",
+                reply="Thank you, could you please reserve a table for two at 21:00 under Test Guest's name?",
+            ),
+            decision(
+                next_state="negotiating",
+                reply="Could you please confirm the reservation is made under Test Guest's name?",
+            ),
+            decision(next_state="done", manager_confirmed=True, reply="Thank you, looking forward to it."),
+        ],
+        facts=test_facts,
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+
+    async def manager_says(text: str) -> None:
+        await agent._on_manager(SimpleNamespace(is_private=True, raw_text=text))
+        if agent._debounce:
+            await agent._debounce
+
+    await manager_says("This is The Ivy, Covent Garden.")
+    second = client.sent[-1][1]
+    check("possessive fixed on the wire", "under the name Test Guest" in second)
+    check("no possessive left", "Guest's name" not in second)
+    check("24h time fixed on the wire", "21:00" not in second and "9pm" in second)
+
+    await manager_says("Yes, we have a table for two at 9pm.")
+    check("availability is not a booking", convo12.state == "negotiating")
+    check("no recap yet", "Just to confirm" not in client.sent[-1][1])
+
+    await manager_says("Done, that's reserved under your name.")
+    final = client.sent[-1][1]
+    check("booking reaches confirmed", convo12.state == "confirmed")
+    check("the model's 'done' did not skip the recap", "Just to confirm" in final)
+    check("recap: party size", "two" in final)
+    check("recap: time", test_facts.time_human in final)
+    check("recap: date", test_facts.date_human in final)
+    check("recap: restaurant", "The Ivy, Covent Garden" in final)
+    check("recap: guest name", test_facts.guest_name in final)
+    check(
+        "recap complete by the code's own check",
+        guardrails.recap_missing(final, test_facts, "The Ivy, Covent Garden") == [],
+    )
+    print("final message:", final)
+
+    # 18b. a mismatch between the markers and the model is logged, not acted on
+    convo13 = Conversation()
+    convo13.state = "negotiating"
+    convo13.restaurant_name = "The Ivy"
+    convo13.add("manager", "All booked, see you then.")
+    agent, client, convo13 = build_raw(
+        [decision(next_state="negotiating", manager_confirmed=False, reply="Thank you.")],
+        convo13,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._respond()
+    check("the model's call stands", convo13.state == "negotiating")
+    journal_lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    mismatches = [line for line in journal_lines if '"confirmation_mismatch"' in line]
+    check("mismatch logged", bool(mismatches))
+    check("markers named in the log", "booked" in mismatches[-1] and "see you then" in mismatches[-1])
+    check("logged as a warning", '"level": "warning"' in mismatches[-1])
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

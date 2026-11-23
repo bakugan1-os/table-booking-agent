@@ -97,10 +97,14 @@ _NUMBER_WORDS = {
 }
 
 
+def human_party_word(size: int) -> str:
+    """2 -> 'two'."""
+    return _NUMBER_WORDS.get(size, str(size))
+
+
 def human_party(size: int) -> str:
     """2 -> 'two people'."""
-    word = _NUMBER_WORDS.get(size, str(size))
-    return f"{word} {'person' if size == 1 else 'people'}"
+    return f"{human_party_word(size)} {'person' if size == 1 else 'people'}"
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,13 @@ class Facts:
     @property
     def party_human(self) -> str:
         return human_party(self.party_size)
+
+    @property
+    def party_word(self) -> str:
+        return human_party_word(self.party_size)
+
+    def is_today(self, now: datetime | None = None) -> bool:
+        return (now or datetime.now(self.tz)).date() == self.date
 
 
 def _resolve_date(raw: object, tz: ZoneInfo, where: str = "facts.yaml") -> date_cls:

@@ -72,6 +72,23 @@ the guest's name and stays in `negotiating`; the first dry run confirmed on
 availability alone. `done` is reachable only from `confirmed`. A model that
 jumps the gun lands in `negotiating` instead.
 
+**A confirmed booking always routes through `confirmed`.** The second dry run
+lost its recap: the model returned `manager_confirmed: true` but proposed
+`next_state: "done"`, the "done only from confirmed" rule refused the jump,
+the state stayed `negotiating`, and the model's own "Thank you, looking
+forward to it." went out instead. So `manager_confirmed` plus a known
+restaurant now forces `confirmed` whatever the model proposed, and the recap
+is checked in code: all five fields (party size, time, date, restaurant,
+guest name) must appear in the text that went out, or a `recap_incomplete`
+warning lands in the journal.
+
+**Disagreements are logged, not acted on.** If the manager's message carries
+a booking marker (reserved, booked, confirmed, that's done, see you then) and
+the model still says `manager_confirmed: false`, a `confirmation_mismatch`
+warning goes to the journal. The model's decision stands: a keyword list is
+not good enough to confirm a booking on its own, but it is good enough to
+tell us the model may be reading the room wrongly.
+
 **House style is enforced after the model, not asked for before it.** The
 salutation comes from London's clock (`greeting_word`: morning before noon,
 afternoon before 6pm, evening after), and `sanitize` rewrites a wrong "Good
