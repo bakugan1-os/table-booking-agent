@@ -902,6 +902,95 @@ async def main() -> int:
     await agent._on_manager(voice_event(504))
     check("without stt the manager is asked to type", "typing it" in client.sent[-1][1])
 
+    # 22. a name heard in a voice note is checked in writing before any recap
+    heard = FakeVoice(transcript="Good evening, this is the Ivy Covent Garden.")
+    convo30 = Conversation()
+    convo30.state = "requesting"
+    agent, client, convo30 = build_raw(
+        [
+            # heard over voice, so the spelling is a guess
+            decision(
+                next_state="negotiating",
+                restaurant_name="the Ivy Covent Garden",
+                reply="Thank you. Could you reserve a table for two at 9pm?",
+            ),
+            # the manager types it, and confirms in the same breath
+            decision(
+                next_state="confirmed",
+                manager_confirmed=True,
+                restaurant_name="The Ivy, Covent Garden",
+                reply="Lovely.",
+            ),
+        ],
+        convo30,
+        facts=agreed_facts,
+        voice=heard,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await agent._on_manager(voice_event(600))
+    if agent._debounce:
+        await agent._debounce
+    asked = client.sent[-1][1]
+    check("the name is held unverified", convo30.restaurant_name == "the Ivy Covent Garden")
+    check("not trusted yet", not convo30.restaurant_verified)
+    check("the agent asks about it", "just to make sure I have it right" in asked)
+    check("the heard name is quoted", "the Ivy Covent Garden" in asked)
+    check("and asks for it in writing", "type it for me" in asked)
+    check("asked in text, not voice", client.files == [])
+    check("the model's own reply was held back", "reserve a table" not in asked)
+
+    await manager_says_to(agent, "The Ivy, Covent Garden.")
+    final = client.sent[-1][1]
+    check("the typed name wins", convo30.restaurant_name == "The Ivy, Covent Garden")
+    check("and is now trusted", convo30.restaurant_verified)
+    check("the recap follows", "Just to confirm" in final)
+    print("verified recap:", final)
+    check("with the written name", "The Ivy, Covent Garden" in final)
+    check("and not the heard one", "the Ivy Covent Garden," not in final)
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    verified = [line for line in lines if '"restaurant_name_verified"' in line]
+    check("the correction is journalled", bool(verified))
+    check(
+        "from the heard name to the written one",
+        '"from": "the Ivy Covent Garden"' in verified[-1]
+        and '"to": "The Ivy, Covent Garden"' in verified[-1],
+    )
+
+    # 22b. asked once only: a second voice note does not start again
+    convo31 = Conversation()
+    convo31.state = "negotiating"
+    convo31.restaurant_name = "The Ivy"
+    convo31.restaurant_verified = False
+    convo31.restaurant_check_sent = True
+    agent, client, convo31 = build_raw(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely.")],
+        convo31,
+        facts=agreed_facts,
+        voice=FakeVoice(transcript="All booked, see you at nine."),
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(601))
+    if agent._debounce:
+        await agent._debounce
+    check("no recap on an unverified name", "Just to confirm" not in client.sent[-1][1])
+    check("it goes to the operator instead", client.sent[-1][0] == "me")
+    check("saying why", "never written" in client.sent[-1][1])
+    check("and the state holds", convo31.state == "negotiating")
+
+    # 22c. a name typed in the first place needs no checking
+    convo32 = Conversation()
+    convo32.state = "requesting"
+    agent, client, convo32 = build_raw(
+        [decision(next_state="negotiating", restaurant_name="The Ivy", reply="Thank you.")],
+        convo32,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "This is The Ivy.")
+    check("a typed name is trusted at once", convo32.restaurant_verified)
+    check("and nothing extra is asked", "make sure I have it right" not in client.sent[-1][1])
+
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415
 

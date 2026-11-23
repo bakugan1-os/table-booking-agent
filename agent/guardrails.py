@@ -195,6 +195,14 @@ def sanitize(
 
 # --- canned lines: the code owns these, the model never writes them ----------
 
+def verify_restaurant_line(name: str) -> str:
+    """A name heard over voice, checked in writing - Whisper mishears names."""
+    return (
+        f"Sorry, just to make sure I have it right - is that {name}? "
+        "Could you type it for me, please?"
+    )
+
+
 def voice_unreadable_line() -> str:
     """When a voice note cannot be transcribed - asked in text, on purpose."""
     return (

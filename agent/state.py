@@ -38,6 +38,10 @@ class Conversation:
     outcome: str | None = None
     #: The manager's last message was a voice note, so we answer in kind.
     last_manager_voice: bool = False
+    #: A restaurant name heard in a voice note is not trusted until the
+    #: manager has typed it: Whisper mishears proper nouns.
+    restaurant_verified: bool = False
+    restaurant_check_sent: bool = False
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)
@@ -80,7 +84,13 @@ class Conversation:
 
     @restaurant_name.setter
     def restaurant_name(self, value: str | None) -> None:
+        """Setting a name counts as having it in writing.
+
+        The one place that is not true is a name heard in a voice note, and
+        that caller clears `restaurant_verified` straight afterwards.
+        """
         self.agreed["restaurant_name"] = value
+        self.restaurant_verified = bool(value)
 
     def agree(self, key: str, value: object) -> tuple[object, object]:
         """Record an operator-approved change; returns (before, after)."""
@@ -182,6 +192,9 @@ class Conversation:
         legacy_restaurant = data.get("restaurant_name")
         if legacy_restaurant and not convo.agreed.get("restaurant_name"):
             convo.agreed["restaurant_name"] = legacy_restaurant
+        # ...and before voice, when every name came from a typed message
+        if convo.agreed.get("restaurant_name") and "restaurant_verified" not in data:
+            convo.restaurant_verified = True
         if convo.state not in _ORDER:
             convo.state = "greeting"
         return convo

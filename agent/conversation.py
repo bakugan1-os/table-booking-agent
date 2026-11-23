@@ -340,6 +340,31 @@ class BookingAgent:
         )
         print(f"Outcome: {outcome}.")
 
+    def _learn_restaurant(self, decision: Decision, *, from_voice: bool) -> None:
+        """Take the restaurant's name, and remember how we came by it."""
+        name = (decision.restaurant_name or "").strip()
+        if not name:
+            return
+        current = self.convo.restaurant_name
+        if current and self.convo.restaurant_verified:
+            return  # settled in writing already
+
+        if from_voice:
+            if current:
+                return  # one unverified guess is enough to ask about
+            self.convo.restaurant_name = name
+            self.convo.restaurant_verified = False
+            self.journal.write("restaurant_name_heard", name=name, source="voice")
+            return
+
+        self.convo.restaurant_name = name
+        self.convo.restaurant_verified = True
+        self.journal.write(
+            "restaurant_name_verified", source="text", **{"from": current, "to": name}
+        )
+        if current and current != name:
+            print(f"Restaurant name corrected in writing: {current} -> {name}.")
+
     def _already_agreed(self, decision: Decision) -> bool:
         """True when the model is asking to approve what is already agreed."""
         topic = decision.requested_change
@@ -384,8 +409,10 @@ class BookingAgent:
                 )
                 return
 
-            if decision.restaurant_name and not self.convo.restaurant_name:
-                self.convo.restaurant_name = decision.restaurant_name
+            self._learn_restaurant(decision, from_voice=speak)
+            # The name may have arrived in this very turn, and the recap is
+            # built from `booking`, so take it again.
+            booking = self.convo.booking(self.facts)
 
             # Flag a disagreement for the log; never overrule the model here.
             markers = guardrails.confirmation_markers(last_manager)
@@ -450,10 +477,37 @@ class BookingAgent:
                 await self._escalate(topic, decision.understood, batch, decision)
                 return
 
+            # 3b. A name heard in a voice note is checked in writing, once.
+            if self.convo.restaurant_name and not self.convo.restaurant_verified:
+                if not self.convo.restaurant_check_sent:
+                    self.convo.restaurant_check_sent = True
+                    await self._send(
+                        guardrails.verify_restaurant_line(self.convo.restaurant_name),
+                        decision=decision,
+                        note="verify_restaurant",
+                        speak=False,  # the point is to have it in writing
+                    )
+                    return
+                if decision.manager_confirmed:
+                    # Asked already and still only heard it: do not confirm a
+                    # booking at a restaurant whose name we cannot spell.
+                    await self._send(
+                        guardrails.holding_line(), decision=decision, note="holding", speak=speak
+                    )
+                    await self._escalate(
+                        "unverified_name",
+                        "They have confirmed, but the restaurant's name has only "
+                        f"been heard, never written: {self.convo.restaurant_name}.",
+                        batch,
+                        decision,
+                    )
+                    return
+
             # 4. Ordinary turn.
             new_state = self.convo.next_state(
                 decision.next_state,
-                restaurant_known=bool(self.convo.restaurant_name),
+                restaurant_known=bool(self.convo.restaurant_name)
+                and self.convo.restaurant_verified,
                 manager_confirmed=decision.manager_confirmed,
                 manager_refused=decision.manager_refused,
             )

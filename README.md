@@ -156,6 +156,13 @@ reply.
 **The confirmation recap is always text**, whatever the conversation has
 been doing, so it can be read and checked at a glance.
 
+A restaurant name picked up from a transcript is treated as a guess:
+Whisper mishears proper nouns, and that name goes into the recap. The agent
+asks about it once, in writing - "is that The Ivy? Could you type it for me,
+please?" - and the typed answer replaces it (`restaurant_name_verified` in
+the journal). No recap goes out until then. A name that was typed in the
+first place is trusted straight away.
+
 Either half can be missing and the agent keeps going:
 
 | missing | what happens |

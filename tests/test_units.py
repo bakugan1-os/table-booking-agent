@@ -472,6 +472,15 @@ check("agreed seeds the guest name", agreed.agreed["guest_name"] == facts.guest_
 check("agreed starts without a restaurant", agreed.restaurant_name is None)
 agreed.restaurant_name = "The Ivy"
 check("restaurant lands in agreed", agreed.agreed["restaurant_name"] == "The Ivy")
+check("a name set in writing is trusted", agreed.restaurant_verified)
+check(
+    "the verification question quotes the name",
+    guardrails.verify_restaurant_line("The Ivy")
+    == "Sorry, just to make sure I have it right - is that The Ivy? Could you type it for me, please?",
+)
+legacy = TMP / "legacy_name.json"
+legacy.write_text('{"state": "negotiating", "agreed": {"restaurant_name": "The Ivy"}}', encoding="utf-8")
+check("a pre-voice state file is trusted", Conversation.load(legacy).restaurant_verified)
 before, after = agreed.agree("time", "21:30")
 check("agree returns the move", (before, after) == (facts.time, "21:30"))
 moved = agreed.booking(facts)

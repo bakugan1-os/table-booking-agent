@@ -268,6 +268,17 @@ Encoding is `libopus` at 32k mono 48kHz, which is what Telegram's own
 clients send; the duration comes from ffprobe when it is there, so the
 voice note does not show as 0:00.
 
+**A name that was only heard is not a name yet.** Whisper is good at
+sentences and poor at proper nouns, and the restaurant's name ends up in
+the confirmation recap. So a name learned from a transcript is held as
+unverified: the agent asks once, in writing ("is that The Ivy? Could you
+type it for me, please?"), the typed answer replaces it and the swap is
+journalled as `restaurant_name_verified` with `from`/`to`. No recap goes
+out while the name is unverified, and if the manager confirms the booking
+anyway the operator is asked rather than the agent guessing at a spelling.
+A name that was typed in the first place is trusted immediately, so nothing
+changes for a text-only conversation.
+
 **What is not done.** Voice notes are transcribed, never replayed to the
 operator: escalations in Saved Messages are text, with the transcript
 quoted. The agent does not detect the manager's language, and it does not
