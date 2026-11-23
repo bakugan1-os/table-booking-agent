@@ -17,6 +17,7 @@ from .state import ROLE_AGENT, ROLE_MANAGER, STATES
 ATTEMPTS = 3
 
 CHANGES = ("time", "party_size", "deposit", "payment", "none")
+CHANNELS = ("auto", "text")
 _NULLISH = {"", "null", "none", "unknown", "n/a"}
 
 
@@ -33,6 +34,7 @@ class Decision:
     asked_if_bot: bool
     manager_confirmed: bool
     manager_refused: bool
+    reply_channel: str
     restaurant_name: str | None
 
     def as_log(self) -> dict:
@@ -47,6 +49,7 @@ class Decision:
             "asked_if_bot": self.asked_if_bot,
             "manager_confirmed": self.manager_confirmed,
             "manager_refused": self.manager_refused,
+            "reply_channel": self.reply_channel,
         }
 
 
@@ -105,6 +108,10 @@ def _validate(data: dict | None) -> tuple[Decision | None, str]:
     if change not in CHANGES:
         change = "none"
 
+    channel = str(data.get("reply_channel") or "auto").strip().lower()
+    if channel not in CHANNELS:
+        channel = "auto"
+
     raw_value = data.get("change_value")
     value = str(raw_value).strip() if raw_value is not None else ""
     change_value = value[:40] if value and value.lower() not in _NULLISH else None
@@ -126,6 +133,7 @@ def _validate(data: dict | None) -> tuple[Decision | None, str]:
             asked_if_bot=_as_bool(data.get("asked_if_bot")),
             manager_confirmed=_as_bool(data.get("manager_confirmed")),
             manager_refused=_as_bool(data.get("manager_refused")),
+            reply_channel=channel,
             restaurant_name=restaurant_name,
         ),
         "",

@@ -151,6 +151,7 @@ def decision(**kw) -> Decision:
         asked_if_bot=False,
         manager_confirmed=False,
         manager_refused=False,
+        reply_channel="auto",
         restaurant_name=None,
     )
     base.update(kw)
@@ -974,8 +975,10 @@ async def main() -> int:
     if agent._debounce:
         await agent._debounce
     check("no recap on an unverified name", "Just to confirm" not in client.sent[-1][1])
-    check("it goes to the operator instead", client.sent[-1][0] == "me")
-    check("saying why", "never written" in client.sent[-1][1])
+    check("the manager is asked, not the operator", client.sent[-1][0] == "MANAGER")
+    check("for the name in writing", "type the restaurant's name" in client.sent[-1][1])
+    check("not a 'let me check'", "check that with the guest" not in client.sent[-1][1])
+    check("in text", client.files == [])
     check("and the state holds", convo31.state == "negotiating")
 
     # 22c. a name typed in the first place needs no checking
@@ -990,6 +993,114 @@ async def main() -> int:
     await manager_says_to(agent, "This is The Ivy.")
     check("a typed name is trusted at once", convo32.restaurant_verified)
     check("and nothing extra is asked", "make sure I have it right" not in client.sent[-1][1])
+
+    # 23. the channel: a phone number is never read aloud
+    kit4 = FakeVoice(transcript="What is the number to reach you on?")
+    convo33 = Conversation()
+    convo33.state = "negotiating"
+    convo33.restaurant_name = "The Ivy"
+    convo33.phone_requested = True
+    agent, client, convo33 = build_raw(
+        [decision(reply="Of course, it's +44 7700 900123.")],
+        convo33,
+        facts=agreed_facts,
+        voice=kit4,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(700))
+    if agent._debounce:
+        await agent._debounce
+    check("a number goes out in text", len(client.sent) == 1 and client.files == [])
+    check("the number survived the guardrails", "900123" in client.sent[-1][1])
+    check("nothing was synthesised", kit4.spoken == [])
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    check("and the reason is logged", any('"voice_withheld"' in line for line in lines))
+
+    # 23b. "type it, not voice" sticks for the rest of the conversation
+    kit5 = FakeVoice(transcript="Type in the text, not voice message.")
+    convo34 = Conversation()
+    convo34.state = "negotiating"
+    convo34.restaurant_name = "The Ivy"
+    agent, client, convo34 = build_raw(
+        [
+            decision(reply="Of course."),
+            decision(reply="Thank you, that's kind of you."),
+        ],
+        convo34,
+        facts=agreed_facts,
+        voice=kit5,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(701))
+    if agent._debounce:
+        await agent._debounce
+    check("asked for text, answered in text", client.files == [])
+    check("the preference is remembered", convo34.prefers_text)
+    kit5._transcript = "Lovely."
+    await agent._on_manager(voice_event(702))
+    if agent._debounce:
+        await agent._debounce
+    check("and it sticks for the next voice note too", client.files == [])
+    check("two written replies", len(client.sent) == 2)
+
+    # 23c. the model can ask for text itself, and a claim of writing blocks voice
+    kit6 = FakeVoice(transcript="Could you spell that for me?")
+    convo35 = Conversation()
+    convo35.state = "negotiating"
+    convo35.restaurant_name = "The Ivy"
+    agent, client, convo35 = build_raw(
+        [decision(reply="Certainly.", reply_channel="text")],
+        convo35,
+        facts=agreed_facts,
+        voice=kit6,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(703))
+    if agent._debounce:
+        await agent._debounce
+    check("reply_channel text is honoured", client.files == [])
+
+    kit7 = FakeVoice(transcript="Thanks.")
+    convo36 = Conversation()
+    convo36.state = "negotiating"
+    convo36.restaurant_name = "The Ivy"
+    agent, client, convo36 = build_raw(
+        [decision(reply="Here it is, typed out for you.")],
+        convo36,
+        facts=agreed_facts,
+        voice=kit7,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(704))
+    if agent._debounce:
+        await agent._debounce
+    check("a voice note never claims to be typed", client.files == [] and len(client.sent) == 1)
+    check("but the words still go out", "typed out for you" in client.sent[-1][1])
+
+    # 24. "yes, that's right" to a written spelling is verification enough
+    kit8 = FakeVoice(transcript="Yes, that's right.")
+    convo37 = Conversation()
+    convo37.state = "negotiating"
+    convo37.restaurant_name = "The Ivy, Covent Garden"
+    convo37.restaurant_verified = False
+    convo37.restaurant_check_sent = True
+    agent, client, convo37 = build_raw(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely.")],
+        convo37,
+        facts=agreed_facts,
+        voice=kit8,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(705))
+    if agent._debounce:
+        await agent._debounce
+    check("a spoken yes verifies the spelling", convo37.restaurant_verified)
+    check("the recap follows", "Just to confirm" in client.sent[-1][1])
+    check("with the name we showed them", "The Ivy, Covent Garden" in client.sent[-1][1])
+    check("and the recap is written", client.files == [])
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    agreed_lines = [line for line in lines if '"source": "agreed"' in line]
+    check("verification by agreement is journalled", bool(agreed_lines))
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

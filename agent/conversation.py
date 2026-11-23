@@ -398,7 +398,17 @@ class BookingAgent:
             batch = self.convo.manager_batch()
             last_manager = "\n".join(batch) or self.convo.last_manager_text()
             # Answer in the medium they used - except the recap, always text.
-            speak = self.convo.last_manager_voice
+            if guardrails.wants_writing(last_manager):
+                if not self.convo.prefers_text:
+                    self.journal.write(
+                        "prefers_text", reason="the manager asked for writing",
+                        text=last_manager[:200],
+                    )
+                self.convo.prefers_text = True
+            speak = self.convo.last_manager_voice and not self.convo.prefers_text
+
+            if decision is not None and decision.reply_channel == "text":
+                speak = False
 
             if decision is None:
                 await self._send(guardrails.holding_line(), speak=speak)
@@ -478,6 +488,22 @@ class BookingAgent:
                 return
 
             # 3b. A name heard in a voice note is checked in writing, once.
+            if (
+                self.convo.restaurant_name
+                and not self.convo.restaurant_verified
+                and self.convo.restaurant_check_sent
+                and guardrails.is_affirmative(last_manager)
+            ):
+                # We showed them the spelling in writing and they agreed to
+                # it; that is as good as having them type it.
+                self.convo.restaurant_verified = True
+                self.journal.write(
+                    "restaurant_name_verified",
+                    source="agreed",
+                    **{"from": self.convo.restaurant_name, "to": self.convo.restaurant_name},
+                )
+                booking = self.convo.booking(self.facts)
+
             if self.convo.restaurant_name and not self.convo.restaurant_verified:
                 if not self.convo.restaurant_check_sent:
                     self.convo.restaurant_check_sent = True
@@ -489,17 +515,20 @@ class BookingAgent:
                     )
                     return
                 if decision.manager_confirmed:
-                    # Asked already and still only heard it: do not confirm a
-                    # booking at a restaurant whose name we cannot spell.
-                    await self._send(
-                        guardrails.holding_line(), decision=decision, note="holding", speak=speak
+                    # Asked already and still only heard it. This is the
+                    # manager's to settle, not the operator's: one short
+                    # written question, no "let me check with the guest".
+                    self.journal.write(
+                        "name_still_unverified",
+                        level="warning",
+                        name=self.convo.restaurant_name,
+                        manager=last_manager,
                     )
-                    await self._escalate(
-                        "unverified_name",
-                        "They have confirmed, but the restaurant's name has only "
-                        f"been heard, never written: {self.convo.restaurant_name}.",
-                        batch,
-                        decision,
+                    await self._send(
+                        guardrails.ask_typed_name_line(),
+                        decision=decision,
+                        note="ask_typed_name",
+                        speak=False,
                     )
                     return
 
@@ -596,6 +625,15 @@ class BookingAgent:
         event: str = "sent",
         speak: bool = False,
     ) -> None:
+        if speak:
+            # Last word on the channel: a number or a claim of being written
+            # has no business in a voice note.
+            withhold = guardrails.unspeakable(text)
+            if withhold:
+                speak = False
+                self.journal.write(
+                    "voice_withheld", level="warning", reason=withhold, text=text
+                )
         spoken = await self._say(text) if speak else False
         if not spoken:
             await self.client.send_message(self.manager, text)

@@ -42,6 +42,8 @@ class Conversation:
     #: manager has typed it: Whisper mishears proper nouns.
     restaurant_verified: bool = False
     restaurant_check_sent: bool = False
+    #: The manager has asked for things in writing; voice notes stop.
+    prefers_text: bool = False
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)

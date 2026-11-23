@@ -268,14 +268,30 @@ Encoding is `libopus` at 32k mono 48kHz, which is what Telegram's own
 clients send; the duration comes from ffprobe when it is there, so the
 voice note does not show as 0:00.
 
+**The channel is decided by the code, not the model.** The first real voice
+run read a phone number aloud three times, the last of them as "it's
++380..., typed out for you", which was simply untrue. Now a message is
+written rather than spoken whenever it carries a number to copy or an email
+address, whenever it claims to be written ("typed out", "in text"), and
+whenever the manager has asked for writing - "can you type me the number?",
+"type in the text, not voice message" - which sets `prefers_text` for the
+rest of the conversation. The model has a `reply_channel` field to say what
+it thinks the manager asked for, and that can only force text, never voice.
+Each withheld voice note is journalled as `voice_withheld` with the reason.
+
 **A name that was only heard is not a name yet.** Whisper is good at
 sentences and poor at proper nouns, and the restaurant's name ends up in
 the confirmation recap. So a name learned from a transcript is held as
 unverified: the agent asks once, in writing ("is that The Ivy? Could you
 type it for me, please?"), the typed answer replaces it and the swap is
-journalled as `restaurant_name_verified` with `from`/`to`. No recap goes
-out while the name is unverified, and if the manager confirms the booking
-anyway the operator is asked rather than the agent guessing at a spelling.
+journalled as `restaurant_name_verified` with `from`/`to`. Since the
+spelling was put in front of them in writing, a plain "yes, that's right" -
+spoken or typed - verifies it just as well as retyping the name. No recap
+goes out while the name is unverified; if the manager confirms the booking
+anyway, they get one short written question ("could you type the
+restaurant's name for me so I have it exactly right?"). That is the
+manager's to settle, so it does not go to the operator and it is not
+dressed up as "let me check with the guest".
 A name that was typed in the first place is trusted immediately, so nothing
 changes for a text-only conversation.
 

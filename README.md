@@ -110,6 +110,20 @@ coroutines called without `await`, and the stub client in
 `test_conversation.py` keeps Telethon's async/sync split, so the startup and
 sign-in paths fail here rather than in front of the manager.
 
+### Exporting a run
+
+```powershell
+python tools\export_log.py            # the last run
+python tools\export_log.py --all      # every run in the journal
+```
+
+Writes `submission/decision_log.md` - one row per message with the time,
+the direction, the text, what the agent understood and what it decided -
+and `submission/decisions.jsonl`, the same events raw. Phone numbers and
+email addresses are masked in both (`+380******597`). **Names are not**, so
+read the files before sharing them; `submission/` is git-ignored for that
+reason (`git add -f submission` if you decide otherwise).
+
 ### Checking the model before a run
 
 Neither suite talks to the LLM. Before a real booking - and after changing
@@ -244,6 +258,7 @@ Enforced in code, not just asked for in the prompt:
 | `agent/voice.py` | Whisper in, edge-tts and ffmpeg out |
 | `tests/` | two stub-driven test scripts |
 | `tools/probe_llm.py` | checks an LLM endpoint before a real run |
+| `tools/export_log.py` | the journal as a readable, masked decision log |
 | `state.json` | state, history, pending question (git-ignored) |
 | `logs/decisions.jsonl` | one line per message, escalation and decision |
 

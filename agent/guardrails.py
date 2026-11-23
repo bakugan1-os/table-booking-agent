@@ -36,6 +36,20 @@ _BOT_QUESTION = re.compile(
     re.IGNORECASE,
 )
 
+# "Can you type me the number?" - and then everything stays in writing.
+_WANTS_WRITING = re.compile(
+    r"\b(type|typed|typing|text me|in text|by text|write it|written|spell"
+    r"|in writing"
+    r"|напиши|текстом"
+    r"|письмово)\b",
+    re.IGNORECASE,
+)
+# Claims that only make sense in a written message.
+_CLAIMS_WRITING = re.compile(
+    r"\b(typed|written|in text|in writing|spelled out|here it is in)\b", re.IGNORECASE
+)
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
+
 _URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _MARKDOWN = re.compile(r"[*_`~#>\[\]|]")
 _EMOJI = re.compile(
@@ -55,6 +69,40 @@ def asks_for_secrets(text: str) -> bool:
 
 def wants_phone(text: str) -> bool:
     return bool(_PHONE_REQUEST.search(text or ""))
+
+
+def wants_writing(text: str) -> bool:
+    """The manager has asked for something in writing, not spoken."""
+    return bool(_WANTS_WRITING.search(text or ""))
+
+
+def unspeakable(text: str) -> str | None:
+    """Why this message must be written, or None if it can be spoken.
+
+    A phone number read aloud is useless, and a voice note saying "typed out
+    for you" is a lie - the live run sent both.
+    """
+    body = text or ""
+    if _LONG_DIGITS.search(body):
+        return "it contains a number to write down"
+    if _EMAIL.search(body):
+        return "it contains an email address"
+    if _CLAIMS_WRITING.search(body):
+        return "it claims to be written"
+    return None
+
+
+def is_affirmative(text: str) -> bool:
+    """A plain yes, in any of the three languages the operator writes in."""
+    return operator_verdict(text) == "yes"
+
+
+def ask_typed_name_line() -> str:
+    """Asked of the manager when the name is still only something we heard."""
+    return (
+        "Lovely - could you type the restaurant's name for me so I have it "
+        "exactly right?"
+    )
 
 
 def asks_if_bot(text: str) -> bool:

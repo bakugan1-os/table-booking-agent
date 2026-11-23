@@ -338,6 +338,31 @@ check(
     all("5pm" in guardrails.off_topic_line(facts, n) for n in range(3)),
 )
 check("'may we settle' is gone", "may we settle" not in guardrails.bot_disclosure_line(facts).lower())
+
+# what may not be spoken
+check("a phone number cannot be spoken", guardrails.unspeakable("it's +44 7700 900123") is not None)
+check("an email cannot be spoken", guardrails.unspeakable("write to me@example.com") is not None)
+check(
+    "a claim of being written cannot be spoken",
+    guardrails.unspeakable("Here it is, typed out for you.") is not None,
+)
+check("and the reason says so", "written" in (guardrails.unspeakable("typed out for you") or ""))
+check("an ordinary line can be spoken", guardrails.unspeakable("Thank you, 9pm suits us.") is None)
+check("a time is not a number to write down", guardrails.unspeakable("See you at 9.30pm.") is None)
+
+check("'can you type it' asks for writing", guardrails.wants_writing("Can you type me the number?"))
+check("'not voice message' asks for writing", guardrails.wants_writing("Type in the text, not voice message."))
+check("'spell it' asks for writing", guardrails.wants_writing("Could you spell that?"))
+check("Ukrainian napyshy", guardrails.wants_writing("напиши будь ласка"))
+check("an ordinary question does not", not guardrails.wants_writing("How many guests?"))
+check("yes is affirmative", guardrails.is_affirmative("Yes, that's right."))
+check("tak is affirmative", guardrails.is_affirmative("так"))
+check("a correction is not", not guardrails.is_affirmative("No, it's The Ivy."))
+check(
+    "the typed-name question is short and written",
+    guardrails.ask_typed_name_line()
+    == "Lovely - could you type the restaurant's name for me so I have it exactly right?",
+)
 check("disclosure is honest", "AI assistant" in guardrails.bot_disclosure_line(facts))
 
 # none of the fixed lines may speak as though we worked at the restaurant
@@ -694,6 +719,31 @@ class EmptyTranscriptions:
 
 hearing._stt = SimpleNamespace(audio=SimpleNamespace(transcriptions=EmptyTranscriptions()))
 check("an empty transcript counts as a failure", asyncio.run(hearing.transcribe(clip_path)) is None)
+
+# --- 7d. the submission export ----------------------------------------------
+
+from tools.export_log import MESSAGE_EVENTS, load_events, mask, one_line  # noqa: E402
+
+check("a phone number is masked", mask("it's +380672006597") == "it's +380******597")
+check("a spaced number too", "+380" in mask("+380 67 200 65 97") and "6597" not in mask("+380 67 200 65 97"))
+check("the last three digits stay", mask("+380672006597").endswith("597"))
+check("an email is masked", mask("write to me@example.com") == "write to ***@***")
+check("a time is left alone", mask("see you at 9.30pm on 23 November") == "see you at 9.30pm on 23 November")
+check("a party size is left alone", mask("a table for 2") == "a table for 2")
+check("nothing to mask, nothing changed", mask("Thank you very much.") == "Thank you very much.")
+check("long text is cut to one line", one_line("a\nb " * 200).count("\n") == 0)
+check("pipes cannot break the table", "|" not in one_line("a | b"))
+check("voice_received is not exported twice", "voice_received" not in MESSAGE_EVENTS)
+
+export_journal = TMP / "export.jsonl"
+export_journal.write_text(
+    '{"ts": "2026-11-23T20:00:00+00:00", "event": "sent", "text": "old run"}\n'
+    '{"ts": "2026-11-23T21:00:00+00:00", "event": "run", "facts_file": "facts.yaml"}\n'
+    '{"ts": "2026-11-23T21:00:01+00:00", "event": "sent", "text": "new run"}\n',
+    encoding="utf-8",
+)
+check("the last run is picked out", len(load_events(export_journal, only_last_run=True)) == 2)
+check("or everything, on request", len(load_events(export_journal, only_last_run=False)) == 3)
 
 # --- 8. the prompt ----------------------------------------------------------
 

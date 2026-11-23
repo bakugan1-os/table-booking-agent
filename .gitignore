@@ -19,6 +19,10 @@ logs/
 # Voice notes in and out
 voice/
 
+# Exported logs: masked for numbers, but names are not. Read before sharing;
+# "git add -f submission" if you decide to commit them.
+submission/
+
 # Conversation state (contains the chat history)
 state.json
 state.json.bak
