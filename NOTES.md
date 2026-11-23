@@ -86,6 +86,18 @@ topic, the learned restaurant name, counters and flags. On restart the agent
 resumes mid-conversation and does not greet again. `--fresh` moves the old
 file to `state.json.bak`.
 
+**Asyncio wiring.** Telethon binds to whatever loop is running when the
+client is built, and `client.loop` only resolves a *running* loop, so both
+entry points create the client inside the coroutine and go through
+`asyncio.run`. `login.py` uses `async with client`, which is Telethon's
+`start()` and prompts for phone, code and password. Everything on the client
+is awaited; `action()` and `add_event_handler()` are the only plain calls, and
+`run_until_disconnected()`, `start()` and `disconnect()` are plain defs that
+hand back a coroutine, so they are awaited too. `tests/test_units.py` derives
+that list from `TelegramClient` itself with `inspect.iscoroutinefunction` and
+fails on any unawaited call, since a missing `await` is silent until an
+attribute lookup on the coroutine blows up.
+
 **Debounce and typing.** 5-second timer, restarted by each new message, so a
 burst becomes one LLM call. The `typing...` action shows while the model
 thinks. The LLM call runs in a worker thread (`asyncio.to_thread`) so the

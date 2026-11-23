@@ -8,6 +8,7 @@ No network and no Telegram account needed. Plain script, no pytest:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 import tempfile
 from pathlib import Path
@@ -45,15 +46,33 @@ class FakeAction:
 
 
 class FakeClient:
+    """Mirrors Telethon's async/sync split, so a missing await fails here too."""
+
     def __init__(self) -> None:
         self.sent: list[tuple[object, str]] = []
+        self.handlers: list[tuple] = []
+        self._me = SimpleNamespace(id=1, username="guest", first_name="Oliver")
 
-    def action(self, peer, kind):
-        return FakeAction()
+    # awaited in real life - and here
+    async def get_me(self):
+        return self._me
+
+    async def get_entity(self, who):
+        return SimpleNamespace(id=4242, username=str(who))
 
     async def send_message(self, peer, text):
         self.sent.append((peer, text))
         return SimpleNamespace(id=1000 + len(self.sent))
+
+    async def run_until_disconnected(self):
+        return None
+
+    # plain calls in real life - and here
+    def action(self, peer, kind):
+        return FakeAction()
+
+    def add_event_handler(self, callback, event):
+        self.handlers.append((callback, event))
 
 
 class FakeBrain:
@@ -90,7 +109,8 @@ FACTS = load_facts(
 JOURNAL = Journal(TMP / "logs" / "decisions.jsonl")
 
 
-def build(decisions, convo: Conversation | None = None):
+def build_raw(decisions, convo: Conversation | None = None):
+    """An agent that has not been started yet, as main.py would hand it over."""
     client = FakeClient()
     convo = convo or Conversation()
     agent = BookingAgent(
@@ -101,6 +121,12 @@ def build(decisions, convo: Conversation | None = None):
         FakeBrain(decisions),
         JOURNAL,
     )
+    return agent, client, convo
+
+
+def build(decisions, convo: Conversation | None = None):
+    """An agent already wired up, for driving single turns."""
+    agent, client, convo = build_raw(decisions, convo)
     agent.manager = "MANAGER"
     agent.me_id = 1
     return agent, client, convo
@@ -277,6 +303,82 @@ async def main() -> int:
     convo9.save(conv_mod.STATE_FILE)
     reloaded = Conversation.load(conv_mod.STATE_FILE)
     check("reload keeps the phone flag", reloaded is not None and reloaded.phone_requested)
+
+    # 15. the whole startup path, exactly as main.py runs it
+    agent, client, convo10 = build_raw(
+        [decision(reply="Good afternoon, might you have a table for two at 5pm?")]
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    check("get_me awaited", agent.me_id == 1)
+    check("manager resolved", getattr(agent.manager, "id", None) == 4242)
+    check("two handlers registered", len(client.handlers) == 2)
+    check("opening message sent", len(client.sent) == 1 and client.sent[0][0] is agent.manager)
+    check("greeted recorded", convo10.greeted)
+    check("state after greeting", convo10.state == "requesting")
+    check("watchdog kept alive", agent._watchdog_task is not None)
+
+    # 15b. a resumed conversation does not greet again
+    convo11 = Conversation()
+    convo11.greeted = True
+    convo11.state = "negotiating"
+    agent, client, convo11 = build_raw([], convo11)
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    check("no second greeting", client.sent == [])
+
+    # 16. the stub keeps Telethon's async/sync split, or these tests prove nothing
+    from telethon import TelegramClient  # noqa: PLC0415
+
+    returns_coroutine = {"run_until_disconnected", "start", "disconnect"}
+    for name in ("get_me", "get_entity", "send_message", "run_until_disconnected"):
+        real = getattr(TelegramClient, name)
+        check(
+            f"stub {name} must be awaited, like Telethon's",
+            inspect.iscoroutinefunction(getattr(FakeClient, name))
+            and (inspect.iscoroutinefunction(real) or name in returns_coroutine),
+        )
+    for name in ("action", "add_event_handler"):
+        check(
+            f"stub {name} is a plain call, like Telethon's",
+            not inspect.iscoroutinefunction(getattr(FakeClient, name))
+            and not inspect.iscoroutinefunction(getattr(TelegramClient, name)),
+        )
+
+    # 17. login.py's sign-in path, with Telegram stubbed out
+    import login as login_module  # noqa: PLC0415
+
+    from agent.config import Settings  # noqa: PLC0415
+
+    class LoginClient(FakeClient):
+        """Adds the async context manager that `async with client` needs."""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    login_client = LoginClient()
+    original = login_module.TelegramClient
+    login_module.TelegramClient = lambda *a, **kw: login_client
+    try:
+        code = await login_module.sign_in(
+            Settings(
+                api_id=1,
+                api_hash="hash",
+                manager_username="manager",
+                llm_base_url="http://example.invalid",
+                llm_api_key="key",
+                llm_model="model",
+            )
+        )
+    finally:
+        login_module.TelegramClient = original
+    check("login returns success", code == 0)
+    check("login sends nothing", login_client.sent == [])
 
     print(f"\npassed: {len(ok)}")
     if bad:

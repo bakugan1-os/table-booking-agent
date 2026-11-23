@@ -98,6 +98,11 @@ python tests\test_units.py         # facts, time guard, guardrails, state, JSON 
 python tests\test_conversation.py  # one turn at a time: escalation, off-topic, recap
 ```
 
+`test_units.py` also audits `login.py`, `main.py` and `agent/` for Telethon
+coroutines called without `await`, and the stub client in
+`test_conversation.py` keeps Telethon's async/sync split, so the startup and
+sign-in paths fail here rather than in front of the manager.
+
 Each prints `passed: N` and exits non-zero on the first failure, listing the
 checks by name.
 

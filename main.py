@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -105,25 +106,27 @@ def main() -> int:
         time_check_skipped=args.skip_time_check,
     )
     brain = Brain(settings, journal)
-    client = TelegramClient(SESSION_NAME, settings.api_id, settings.api_hash)
-    booking_agent = BookingAgent(client, settings, facts, convo, brain, journal)
 
     async def boot() -> int:
-        await client.connect()
-        if not await client.is_user_authorized():
-            print("The session is not authorised. Run: python login.py")
-            return 1
-        await booking_agent.run()
-        return 0
+        # Built inside the running loop: Telethon binds to the loop it finds.
+        client = TelegramClient(SESSION_NAME, settings.api_id, settings.api_hash)
+        booking_agent = BookingAgent(client, settings, facts, convo, brain, journal)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                print("The session is not authorised. Run: python login.py")
+                return 1
+            await booking_agent.run()
+            return 0
+        finally:
+            if client.is_connected():
+                await client.disconnect()
 
     try:
-        return client.loop.run_until_complete(boot())
+        return asyncio.run(boot())
     except KeyboardInterrupt:
         print("\nStopped. State saved; run main.py again to carry on.")
         return 0
-    finally:
-        if client.is_connected():
-            client.loop.run_until_complete(client.disconnect())
 
 
 if __name__ == "__main__":

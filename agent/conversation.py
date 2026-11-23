@@ -38,6 +38,7 @@ class BookingAgent:
         self.manager = None
         self.me_id: int | None = None
         self._debounce: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
 
     # --- lifecycle -------------------------------------------------------
@@ -76,7 +77,8 @@ class BookingAgent:
         else:
             print("Resumed an existing conversation: not greeting again.")
 
-        asyncio.create_task(self._watchdog())
+        # Keep the reference: a bare create_task may be garbage collected.
+        self._watchdog_task = asyncio.create_task(self._watchdog())
         await self.client.run_until_disconnected()
 
     async def _open_conversation(self) -> None:

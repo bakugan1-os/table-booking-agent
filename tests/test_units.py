@@ -7,6 +7,8 @@ Plain script, no pytest:
 
 from __future__ import annotations
 
+import inspect
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -234,6 +236,66 @@ check("prompt marks unknown restaurant", "UNKNOWN" in prompt)
 check("prompt has state", "CURRENT STATE: negotiating" in prompt)
 check("prompt has contract", '"requested_change"' in prompt)
 check("prompt carries a known restaurant", "The Ivy" in build_system_prompt(facts, "negotiating", "The Ivy"))
+
+# --- 9. every Telethon coroutine call is awaited ----------------------------
+#
+# Catches the class of bug where `me = client.get_me()` silently yields a
+# coroutine object instead of the user.
+
+from telethon import TelegramClient  # noqa: E402
+
+NEEDS_AWAIT = {
+    name
+    for name, _ in inspect.getmembers(TelegramClient, inspect.iscoroutinefunction)
+    if not name.startswith("__")
+}
+# These are plain defs that hand back a coroutine while a loop is running,
+# so they must be awaited too.
+NEEDS_AWAIT |= {"run_until_disconnected", "start", "disconnect"}
+
+CALL = re.compile(r"(?P<obj>[\w.]*client)\.(?P<attr>\w+)\s*\(")
+sources = [ROOT / "login.py", ROOT / "main.py", *sorted((ROOT / "agent").glob("*.py"))]
+offenders: list[str] = []
+scanned = 0
+
+for source in sources:
+    for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+        code = line.split("#", 1)[0]
+        for match in CALL.finditer(code):
+            if match.group("attr") not in NEEDS_AWAIT:
+                continue
+            scanned += 1
+            before = code[: match.start()]
+            if before.rstrip().endswith("await") or "async with" in before:
+                continue
+            offenders.append(f"{source.name}:{number}: {line.strip()}")
+
+check("found Telethon calls to audit", scanned >= 5)
+check("every Telethon coroutine call is awaited", not offenders)
+for offender in offenders:
+    print("  missing await ->", offender)
+check("get_me is in the audited set", "get_me" in NEEDS_AWAIT)
+check("action is not awaited by mistake", "action" not in NEEDS_AWAIT)
+
+
+def audit_line(code: str) -> bool:
+    """True when the line would be reported as a missing await."""
+    code = code.split("#", 1)[0]
+    for match in CALL.finditer(code):
+        if match.group("attr") not in NEEDS_AWAIT:
+            continue
+        before = code[: match.start()]
+        if not (before.rstrip().endswith("await") or "async with" in before):
+            return True
+    return False
+
+
+# The audit must catch the original bug and leave correct code alone.
+check("audit catches a bare get_me", audit_line("    me = client.get_me()"))
+check("audit catches self.client", audit_line("    x = self.client.send_message(p, t)"))
+check("audit passes awaited calls", not audit_line("    me = await client.get_me()"))
+check("audit passes async with action", not audit_line("    async with self.client.action(p, 'typing'):"))
+check("audit ignores other objects", not audit_line("    self.journal.write('sent')"))
 
 print(f"\npassed: {len(ok)}")
 if bad:
