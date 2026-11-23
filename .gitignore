@@ -1,0 +1,17 @@
+# Secrets / environment
+.env
+
+# Telethon / Pyrogram session files
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Logs
+logs/
+*.log
