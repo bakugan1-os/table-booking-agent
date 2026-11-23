@@ -43,6 +43,8 @@ class BookingAgent:
         self.convo.ensure_agreed(facts)
         self.manager = None
         self.me_id: int | None = None
+        #: Set for the opening turn when VOICE_OPENING is on.
+        self._opening_voice = False
         self._debounce: asyncio.Task | None = None
         self._watchdog_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
@@ -65,6 +67,7 @@ class BookingAgent:
             model=self.brain.model,
             voice_in=listening,
             voice_out=speaking,
+            voice_opening=bool(self.settings.voice_opening),
         )
         for note in self.voice.problems() if self.voice else []:
             print(f"WARNING: {note}")
@@ -87,6 +90,10 @@ class BookingAgent:
             f"Voice: listening {'on' if listening else 'off'}, "
             f"speaking {'on' if speaking else 'off'} (the recap is always text)."
         )
+        opening = "on" if self.settings.voice_opening else "off"
+        if self.settings.voice_opening and not speaking:
+            opening = "on, but nothing can be spoken - the opening will be text"
+        print(f"Voice opening: {opening}")
         print("Escalations arrive in Saved Messages; reply there to continue.")
 
         if not self.convo.greeted:
@@ -101,6 +108,12 @@ class BookingAgent:
     async def _open_conversation(self) -> None:
         self.convo.greeted = True
         self.convo.add(ROLE_OPERATOR, OPEN_CONVERSATION)
+        self._opening_voice = bool(self.settings.voice_opening)
+        self.journal.write(
+            "voice_opening",
+            enabled=bool(self.settings.voice_opening),
+            possible=bool(self.voice and self.voice.can_speak),
+        )
         self._save()
         await self._respond()
 
@@ -405,7 +418,11 @@ class BookingAgent:
                         text=last_manager[:200],
                     )
                 self.convo.prefers_text = True
-            speak = self.convo.last_manager_voice and not self.convo.prefers_text
+            opening_voice = self._opening_voice
+            self._opening_voice = False
+            speak = opening_voice or (
+                self.convo.last_manager_voice and not self.convo.prefers_text
+            )
 
             if decision is not None and decision.reply_channel == "text":
                 speak = False
@@ -675,6 +692,9 @@ class BookingAgent:
                     self.manager,
                     str(clip.path),
                     voice_note=True,
+                    # With the voice opening on, every note carries its own
+                    # words underneath, so nothing is lost to a bad line.
+                    caption=text if self.settings.voice_opening else None,
                     attributes=[DocumentAttributeAudio(duration=clip.seconds, voice=True)],
                 )
         except Exception as exc:

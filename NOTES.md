@@ -268,6 +268,15 @@ Encoding is `libopus` at 32k mono 48kHz, which is what Telegram's own
 clients send; the duration comes from ffprobe when it is there, so the
 voice note does not show as 0:00.
 
+**The opening is written unless asked otherwise.** A restaurant manager
+meeting a stranger's voice note cold is a worse first impression than a
+clear written request, so `VOICE_OPENING` is off by default and
+`--voice-opening` turns it on for one run. When it is on, the first message
+is spoken and every voice note the agent sends carries its own words as a
+caption: nothing is lost to a bad line, and the conversation stays readable
+in a screenshot. After the opening the ordinary rules take over, so the
+flag changes the first message and the captions, not the policy.
+
 **The channel is decided by the code, not the model.** The first real voice
 run read a phone number aloud three times, the last of them as "it's
 +380..., typed out for you", which was simply untrue. Now a message is

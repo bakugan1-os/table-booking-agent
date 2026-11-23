@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from telethon import TelegramClient
@@ -46,6 +47,11 @@ def main() -> int:
         action="store_true",
         help="start even if the booking is less than an hour away (testing only)",
     )
+    parser.add_argument(
+        "--voice-opening",
+        action="store_true",
+        help="open with a voice note and caption every voice note (VOICE_OPENING)",
+    )
     args = parser.parse_args()
 
     facts_path = Path(args.facts)
@@ -59,6 +65,9 @@ def main() -> int:
     except ConfigError as exc:
         print(f"Configuration error: {exc}")
         return 1
+
+    if args.voice_opening and not settings.voice_opening:
+        settings = replace(settings, voice_opening=True)
 
     if facts_path.resolve() != FACTS_FILE.resolve():
         print(f"Facts: {facts_path} (not the default {FACTS_FILE.name}).")

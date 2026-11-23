@@ -685,6 +685,8 @@ hearing = Voice(
     TMP / "voice",
 )
 check("stt settings switch listening on", hearing.can_listen)
+check("the spoken opening is off by default", make_settings().voice_opening is False)
+check("and can be switched on", make_settings(voice_opening=True).voice_opening is True)
 
 # ffmpeg decides whether we can speak at all
 hearing.ffmpeg = None

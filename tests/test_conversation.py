@@ -164,13 +164,19 @@ FACTS = load_facts(
 JOURNAL = Journal(TMP / "logs" / "decisions.jsonl")
 
 
-def build_raw(decisions, convo: Conversation | None = None, facts=None, voice=None):
+def build_raw(
+    decisions,
+    convo: Conversation | None = None,
+    facts=None,
+    voice=None,
+    voice_opening=False,
+):
     """An agent that has not been started yet, as main.py would hand it over."""
     client = FakeClient()
     convo = convo or Conversation()
     agent = BookingAgent(
         client,
-        SimpleNamespace(manager_username="manager"),
+        SimpleNamespace(manager_username="manager", voice_opening=voice_opening),
         facts or FACTS,
         convo,
         FakeBrain(decisions),
@@ -1101,6 +1107,73 @@ async def main() -> int:
     lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
     agreed_lines = [line for line in lines if '"source": "agreed"' in line]
     check("verification by agreement is journalled", bool(agreed_lines))
+
+    # 25. the spoken opening (VOICE_OPENING / --voice-opening)
+    opener = FakeVoice()
+    agent, client, convo38 = build_raw(
+        [decision(reply="Good evening, might you have a table for two at 9pm?")],
+        facts=agreed_facts,
+        voice=opener,
+        voice_opening=True,
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    check("the opening is spoken", len(client.files) == 1 and client.sent == [])
+    check("it is a voice note", client.files[0][2].get("voice_note") is True)
+    check("with the words as a caption", client.files[0][2].get("caption", "").startswith("Good evening"))
+    check("and the caption matches what was said", client.files[0][2]["caption"] == opener.spoken[0])
+    check("the state still moved on", convo38.state == "requesting")
+
+    # ... and the ordinary rules resume: a typed message gets a typed reply
+    agent.brain.queue.append(decision(reply="Thank you, that's kind."))
+    await manager_says_to(agent, "Yes, 9pm is free.")
+    check("text in, text out, even with a spoken opening", len(client.sent) == 1)
+    check("still only the one voice note", len(client.files) == 1)
+
+    # ... a voice note back is spoken, and captioned too
+    agent.brain.queue.append(decision(reply="Lovely, thank you."))
+    agent.voice._transcript = "That's booked in."
+    await agent._on_manager(voice_event(800))
+    if agent._debounce:
+        await agent._debounce
+    check("voice in, voice out", len(client.files) == 2)
+    check("the second note is captioned as well", client.files[1][2]["caption"] == "Lovely, thank you.")
+
+    # 25b. off by default: the opening is written and nothing is captioned
+    quiet = FakeVoice()
+    agent, client, convo39 = build_raw(
+        [decision(reply="Good evening, might you have a table for two at 9pm?")],
+        facts=agreed_facts,
+        voice=quiet,
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    check("the opening is written by default", len(client.sent) == 1 and client.files == [])
+    quiet._transcript = "Yes, that's free."
+    agent.brain.queue.append(decision(reply="Thank you."))
+    await agent._on_manager(voice_event(801))
+    if agent._debounce:
+        await agent._debounce
+    check("a voice reply still happens", len(client.files) == 1)
+    check("but carries no caption", client.files[0][2].get("caption") is None)
+
+    # 25c. asked for a spoken opening with no way to speak: plain text
+    agent, client, convo40 = build_raw(
+        [decision(reply="Good evening.")],
+        facts=agreed_facts,
+        voice=FakeVoice(speak=False),
+        voice_opening=True,
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    check("no tts, no spoken opening", len(client.sent) == 1 and client.files == [])
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    openings = [line for line in lines if '"voice_opening"' in line]
+    check("the choice is journalled", bool(openings))
+    check("including that it was not possible", any('"possible": false' in line for line in openings))
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

@@ -46,6 +46,7 @@ pip install -r requirements.txt
    | `STT_API_KEY` | key for it (the same Groq key works) |
    | `STT_MODEL` | `whisper-large-v3` |
    | `TTS_VOICE` | optional; `en-GB-SoniaNeural` by default |
+   | `VOICE_OPENING` | `true` to open with a voice note; `false` by default |
 
    The guest's details live in `.env` on purpose, so nothing personal is
    committed. The agent refuses to start if they are missing from both `.env`
@@ -85,6 +86,7 @@ facts file's timezone - there would not be enough time to arrange it.
 | `--fresh` | ignore `state.json` (kept as `state.json.bak`) and start a new conversation |
 | `--facts PATH` | use another facts file (default `facts.yaml`) |
 | `--skip-time-check` | start anyway when the booking is too close; prints the warning it would have refused with |
+| `--voice-opening` | open with a voice note and caption every voice note (same as `VOICE_OPENING=true`) |
 
 For a dry run against a test manager account:
 
@@ -169,6 +171,13 @@ reply.
 
 **The confirmation recap is always text**, whatever the conversation has
 been doing, so it can be read and checked at a glance.
+
+By default the agent opens in writing. `VOICE_OPENING=true` (or
+`--voice-opening` for one run) makes the first message a voice note instead,
+and from then on every voice note the agent sends carries the same words as
+a caption. Everything after the opening follows the ordinary rules, so a
+manager who types gets typed replies. Startup prints `Voice opening: on` or
+`off`; with no way to speak it says so and writes the opening.
 
 A restaurant name picked up from a transcript is treated as a guess:
 Whisper mishears proper nouns, and that name goes into the recap. The agent

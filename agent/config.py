@@ -50,6 +50,9 @@ class Settings:
     stt_api_key: str | None = None
     stt_model: str = DEFAULT_STT_MODEL
     tts_voice: str = DEFAULT_TTS_VOICE
+    #: Open the conversation with a voice note, and caption every voice note
+    #: the agent sends. Off by default: a written opening is easier to read.
+    voice_opening: bool = False
 
 
 def load_settings() -> Settings:
@@ -64,6 +67,9 @@ def load_settings() -> Settings:
 
     def optional(name: str) -> str | None:
         return (os.getenv(name) or "").strip() or None
+
+    def flag(name: str) -> bool:
+        return (optional(name) or "").lower() in ("1", "true", "yes", "on")
 
     raw_id = need("TG_API_ID")
     try:
@@ -84,6 +90,7 @@ def load_settings() -> Settings:
         stt_api_key=optional("STT_API_KEY"),
         stt_model=optional("STT_MODEL") or DEFAULT_STT_MODEL,
         tts_voice=optional("TTS_VOICE") or DEFAULT_TTS_VOICE,
+        voice_opening=flag("VOICE_OPENING"),
     )
 
 
