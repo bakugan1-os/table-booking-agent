@@ -1,0 +1,14 @@
+# The only facts the agent is allowed to state.
+# Anything missing here is escalated to the operator via Saved Messages.
+#
+# The guest's name and phone number deliberately live in .env
+# (GUEST_NAME, GUEST_PHONE), so this file stays free of personal data and can
+# be committed. A facts file may still carry them - facts.test.yaml does, with
+# test values - and a value in the file wins over .env.
+
+party_size: 2
+time: "17:00"          # 24h, HH:MM
+date: today            # "today", "tomorrow" or an ISO date (2026-11-23)
+timezone: Europe/London
+
+restaurant_name: null  # unknown on purpose: the agent asks the manager for it

@@ -1,0 +1,16 @@
+# Test facts. Committed on purpose: no personal data in here.
+#
+#   python main.py --facts facts.test.yaml --skip-time-check --fresh
+#
+# Same shape as facts.yaml, only later in the evening, so a dry run does not
+# collide with the real booking.
+
+party_size: 2
+time: "21:00"
+date: today            # "today", "tomorrow" or an ISO date (2026-11-23)
+timezone: Europe/London
+
+guest_name: "Test Guest"
+guest_phone: "+44 7700 900123"   # Ofcom's reserved drama range, not a real line
+
+restaurant_name: null  # unknown on purpose: the agent asks the manager for it

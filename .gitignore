@@ -15,3 +15,8 @@ __pycache__/
 # Logs
 logs/
 *.log
+
+# Conversation state (contains the chat history)
+state.json
+state.json.bak
+state.json.tmp
