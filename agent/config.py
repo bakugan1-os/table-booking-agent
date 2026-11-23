@@ -21,6 +21,11 @@ LOG_FILE = ROOT / "logs" / "decisions.jsonl"
 #: The agent refuses to start later than this before the booking.
 START_MARGIN = timedelta(hours=1)
 
+#: Voice defaults. Whisper on Groq for listening, a British voice for talking.
+DEFAULT_STT_MODEL = "whisper-large-v3"
+DEFAULT_TTS_VOICE = "en-GB-SoniaNeural"
+VOICE_DIR = ROOT / "voice"
+
 _PLACEHOLDERS = {"", "change me", "...", "none", "null", "your name"}
 
 
@@ -40,6 +45,11 @@ class Settings:
     # let these take over.
     guest_name: str | None = None
     guest_phone: str | None = None
+    # Voice is optional on both sides; without these the agent stays in text.
+    stt_base_url: str | None = None
+    stt_api_key: str | None = None
+    stt_model: str = DEFAULT_STT_MODEL
+    tts_voice: str = DEFAULT_TTS_VOICE
 
 
 def load_settings() -> Settings:
@@ -70,6 +80,10 @@ def load_settings() -> Settings:
         llm_model=need("LLM_MODEL"),
         guest_name=optional("GUEST_NAME"),
         guest_phone=optional("GUEST_PHONE"),
+        stt_base_url=(optional("STT_BASE_URL") or "").rstrip("/") or None,
+        stt_api_key=optional("STT_API_KEY"),
+        stt_model=optional("STT_MODEL") or DEFAULT_STT_MODEL,
+        tts_voice=optional("TTS_VOICE") or DEFAULT_TTS_VOICE,
     )
 
 

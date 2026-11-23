@@ -24,6 +24,7 @@ from agent.conversation import BookingAgent  # noqa: E402
 from agent.journal import Journal  # noqa: E402
 from agent.llm import Decision  # noqa: E402
 from agent.state import Conversation  # noqa: E402
+from agent.voice import VoiceClip  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="booking-turns-"))
 conv_mod.STATE_FILE = TMP / "state.json"
@@ -51,7 +52,10 @@ class FakeClient:
 
     def __init__(self) -> None:
         self.sent: list[tuple[object, str]] = []
+        self.files: list[tuple] = []
+        self.downloaded: list[str] = []
         self.handlers: list[tuple] = []
+        self.actions: list[str] = []
         self._me = SimpleNamespace(id=1, username="guest", first_name="Oliver")
 
     # awaited in real life - and here
@@ -65,15 +69,54 @@ class FakeClient:
         self.sent.append((peer, text))
         return SimpleNamespace(id=1000 + len(self.sent))
 
+    async def send_file(self, peer, path, **kwargs):
+        self.files.append((peer, path, kwargs))
+        return SimpleNamespace(id=2000 + len(self.files))
+
+    async def download_media(self, message, file=None):
+        self.downloaded.append(file)
+        Path(file).write_bytes(b"fake ogg")
+        return file
+
     async def run_until_disconnected(self):
         return None
 
     # plain calls in real life - and here
     def action(self, peer, kind):
+        self.actions.append(kind)
         return FakeAction()
 
     def add_event_handler(self, callback, event):
         self.handlers.append((callback, event))
+
+
+class FakeVoice:
+    """Stands in for agent.voice.Voice: no Whisper, no edge-tts, no ffmpeg."""
+
+    def __init__(self, *, listen=True, speak=True, transcript="spoken words", clip=True):
+        self.workdir = TMP / "voice"
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.can_listen = listen
+        self.can_speak = speak
+        self._transcript = transcript
+        self._clip = clip
+        self.spoken: list[str] = []
+        self.transcribed: list[Path] = []
+
+    def problems(self):
+        return [] if self.can_listen and self.can_speak else ["voice is limited"]
+
+    async def transcribe(self, path):
+        self.transcribed.append(path)
+        return self._transcript
+
+    async def speak(self, text):
+        self.spoken.append(text)
+        if not self._clip:
+            return None
+        path = self.workdir / "clip.ogg"
+        path.write_bytes(b"fake ogg")
+        return VoiceClip(path, 3)
 
 
 class FakeBrain:
@@ -120,7 +163,7 @@ FACTS = load_facts(
 JOURNAL = Journal(TMP / "logs" / "decisions.jsonl")
 
 
-def build_raw(decisions, convo: Conversation | None = None, facts=None):
+def build_raw(decisions, convo: Conversation | None = None, facts=None, voice=None):
     """An agent that has not been started yet, as main.py would hand it over."""
     client = FakeClient()
     convo = convo or Conversation()
@@ -131,6 +174,7 @@ def build_raw(decisions, convo: Conversation | None = None, facts=None):
         convo,
         FakeBrain(decisions),
         JOURNAL,
+        voice,
     )
     return agent, client, convo
 
@@ -755,6 +799,108 @@ async def main() -> int:
     sent_text = client.sent[-1][1]
     check("the slip is fixed on the wire", "coming back to me" not in sent_text)
     check("and reads as the agent", sent_text.startswith("Thank you for waiting"))
+
+    # 21. voice in, voice out (phase 2)
+    def voice_event(text_id=500):
+        return SimpleNamespace(
+            is_private=True, raw_text="", voice=object(), id=text_id, message=object()
+        )
+
+    kit = FakeVoice()
+    convo24 = Conversation()
+    convo24.state = "negotiating"
+    convo24.restaurant_name = "The Ivy"
+    kit._transcript = "Yes, 9pm is free for two."
+    agent, client, convo24 = build_raw(
+        [decision(reply="Lovely, could you book it under the name Test Guest?")],
+        convo24,
+        facts=agreed_facts,
+        voice=kit,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await agent._on_manager(voice_event())
+    if agent._debounce:
+        await agent._debounce
+    check("the voice note was downloaded", len(client.downloaded) == 1)
+    check("and transcribed into the history", convo24.last_manager_text() == kit._transcript)
+    check("the transcript is flagged as voice", convo24.last_manager_voice)
+    check("the answer went out as a voice note", len(client.files) == 1)
+    check("nothing was written as well", client.sent == [])
+    check("it is a voice note, not a file", client.files[0][2].get("voice_note") is True)
+    check("with a duration", client.files[0][2]["attributes"][0].duration == 3)
+    check("and 'recording voice' was shown", "record-voice" in client.actions)
+    check("the text that was spoken is the reply", "Test Guest" in kit.spoken[0])
+
+    # 21b. the recap is always written, even mid-voice-conversation
+    kit2 = FakeVoice(transcript="All booked for 9pm, see you then.")
+    convo25 = Conversation()
+    convo25.state = "negotiating"
+    convo25.restaurant_name = "The Ivy"
+    agent, client, convo25 = build_raw(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely.")],
+        convo25,
+        facts=agreed_facts,
+        voice=kit2,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(501))
+    if agent._debounce:
+        await agent._debounce
+    check("the recap is text", client.sent and "Just to confirm" in client.sent[-1][1])
+    check("no voice note for the recap", client.files == [])
+    check("nothing was synthesised", kit2.spoken == [])
+
+    # 21c. a text message still gets a text answer
+    kit3 = FakeVoice()
+    convo26 = Conversation()
+    convo26.state = "negotiating"
+    convo26.restaurant_name = "The Ivy"
+    agent, client, convo26 = build_raw(
+        [decision(reply="Thank you, that's kind.")], convo26, facts=agreed_facts, voice=kit3
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "9pm is free.")
+    check("text in, text out", len(client.sent) == 1 and client.files == [])
+    check("the voice kit was left alone", kit3.spoken == [])
+
+    # 21d. transcription fails: ask them to write, in text
+    deaf = FakeVoice(transcript=None)
+    convo27 = Conversation()
+    convo27.state = "negotiating"
+    agent, client, convo27 = build_raw([], convo27, facts=agreed_facts, voice=deaf)
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(502))
+    check("the manager is asked to type", "typing it" in client.sent[-1][1])
+    check("asked in text", client.files == [])
+    check("the model was never called", agent.brain.calls == [])
+    check(
+        "no manager turn invented",
+        not any(h["role"] == "manager" for h in convo27.history),
+    )
+
+    # 21e. synthesis fails: the message still goes out, as text
+    mute = FakeVoice(clip=False, transcript="Could you do 9pm?")
+    convo28 = Conversation()
+    convo28.state = "negotiating"
+    convo28.restaurant_name = "The Ivy"
+    agent, client, convo28 = build_raw(
+        [decision(reply="Yes, 9pm suits us.")], convo28, facts=agreed_facts, voice=mute
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(503))
+    if agent._debounce:
+        await agent._debounce
+    check("it tried to speak", mute.spoken == ["Yes, 9pm suits us."])
+    check("and fell back to text", len(client.sent) == 1 and client.files == [])
+
+    # 21f. no voice kit at all: phase 1 behaviour, unchanged
+    convo29 = Conversation()
+    convo29.state = "negotiating"
+    agent, client, convo29 = build_raw([], convo29, facts=agreed_facts)
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(504))
+    check("without stt the manager is asked to type", "typing it" in client.sent[-1][1])
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

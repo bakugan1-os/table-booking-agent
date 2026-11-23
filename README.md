@@ -10,6 +10,9 @@ Messages - about anything it does not already know.
 - Python 3.11+
 - Telegram API credentials from <https://my.telegram.org> (API development tools)
 - An OpenAI-compatible LLM endpoint (Groq during development, DeepSeek later)
+- For voice notes: ffmpeg on PATH (`winget install Gyan.FFmpeg`, then reopen
+  the terminal) and a Whisper endpoint. Both are optional - without them the
+  agent works in text.
 
 ## Install
 
@@ -39,6 +42,10 @@ pip install -r requirements.txt
    | `LLM_MODEL` | model name as the endpoint spells it |
    | `GUEST_NAME` | the guest's name, used when making the booking |
    | `GUEST_PHONE` | contact number, handed over only if the manager asks |
+   | `STT_BASE_URL` | Whisper endpoint, e.g. `https://api.groq.com/openai/v1` |
+   | `STT_API_KEY` | key for it (the same Groq key works) |
+   | `STT_MODEL` | `whisper-large-v3` |
+   | `TTS_VOICE` | optional; `en-GB-SoniaNeural` by default |
 
    The guest's details live in `.env` on purpose, so nothing personal is
    committed. The agent refuses to start if they are missing from both `.env`
@@ -138,6 +145,30 @@ checks by name.
 5. In `done` the agent still answers the manager, briefly and politely.
 6. After 10 minutes of silence it sends **one** polite nudge, never more.
 
+## Voice notes
+
+The agent answers in whatever the manager used. A voice note is downloaded,
+transcribed by Whisper and handled exactly like a typed message; the reply
+then goes back as a voice note (en-GB-SoniaNeural, encoded to ogg/opus, with
+"recording voice" showing while it is made). A typed message gets a typed
+reply.
+
+**The confirmation recap is always text**, whatever the conversation has
+been doing, so it can be read and checked at a glance.
+
+Either half can be missing and the agent keeps going:
+
+| missing | what happens |
+| --- | --- |
+| `STT_*` not set, or Whisper fails | the agent asks the manager to type it, in text |
+| ffmpeg or edge-tts missing | the reply goes out as text; a warning at startup says why |
+| synthesis fails mid-conversation | that message goes out as text, `tts_failed` in the journal |
+
+Startup prints what is on: `Voice: listening on, speaking off (the recap is
+always text).` Transcripts and voice events are in the journal
+(`voice_received`, `stt_done`, `tts_done`, `stt_failed`, `tts_failed`), and
+the audio itself stays in `voice/`, which is git-ignored.
+
 ## When it needs you
 
 Anything outside `facts.yaml` - a deposit, a different time, a different
@@ -203,6 +234,7 @@ Enforced in code, not just asked for in the prompt:
 | `agent/state.py` | state machine and `state.json` persistence |
 | `agent/conversation.py` | Telethon handlers, debounce, escalation, reminder |
 | `agent/journal.py` | `logs/decisions.jsonl` |
+| `agent/voice.py` | Whisper in, edge-tts and ffmpeg out |
 | `tests/` | two stub-driven test scripts |
 | `tools/probe_llm.py` | checks an LLM endpoint before a real run |
 | `state.json` | state, history, pending question (git-ignored) |

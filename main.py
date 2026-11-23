@@ -12,6 +12,7 @@ from telethon import TelegramClient
 from agent.config import (
     FACTS_FILE,
     LOG_FILE,
+    VOICE_DIR,
     SESSION_FILE,
     SESSION_NAME,
     STATE_FILE,
@@ -24,6 +25,7 @@ from agent.conversation import BookingAgent
 from agent.journal import Journal
 from agent.llm import Brain
 from agent.state import Conversation
+from agent.voice import Voice
 
 
 def main() -> int:
@@ -108,11 +110,14 @@ def main() -> int:
         time_check_skipped=args.skip_time_check,
     )
     brain = Brain(settings, journal)
+    voice = Voice(settings, journal, VOICE_DIR)
 
     async def boot() -> int:
         # Built inside the running loop: Telethon binds to the loop it finds.
         client = TelegramClient(SESSION_NAME, settings.api_id, settings.api_hash)
-        booking_agent = BookingAgent(client, settings, facts, convo, brain, journal)
+        booking_agent = BookingAgent(
+            client, settings, facts, convo, brain, journal, voice
+        )
         try:
             await client.connect()
             if not await client.is_user_authorized():

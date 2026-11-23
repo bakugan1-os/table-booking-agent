@@ -1,10 +1,11 @@
-"""Telethon wiring: debounce, state machine, escalation, reminder."""
+﻿"""Telethon wiring: debounce, state machine, escalation, reminder."""
 
 from __future__ import annotations
 
 import asyncio
 
 from telethon import TelegramClient, events
+from telethon.tl.types import DocumentAttributeAudio
 
 from . import guardrails
 from .config import STATE_FILE, Facts, Settings, greeting_word, human_time
@@ -12,6 +13,7 @@ from .journal import Journal
 from .llm import Brain, Decision
 from .prompts import OPEN_CONVERSATION, build_system_prompt
 from .state import ROLE_AGENT, ROLE_MANAGER, ROLE_OPERATOR, Conversation
+from .voice import Voice
 
 DEBOUNCE_SECONDS = 5
 REMINDER_AFTER_SECONDS = 10 * 60
@@ -28,6 +30,7 @@ class BookingAgent:
         convo: Conversation,
         brain: Brain,
         journal: Journal,
+        voice: "Voice | None" = None,
     ) -> None:
         self.client = client
         self.settings = settings
@@ -35,6 +38,7 @@ class BookingAgent:
         self.convo = convo
         self.brain = brain
         self.journal = journal
+        self.voice = voice
 
         self.convo.ensure_agreed(facts)
         self.manager = None
@@ -50,6 +54,8 @@ class BookingAgent:
         self.me_id = me.id
         self.manager = await self.client.get_entity(self.settings.manager_username)
 
+        listening = bool(self.voice and self.voice.can_listen)
+        speaking = bool(self.voice and self.voice.can_speak)
         self.journal.write(
             "startup",
             state=self.convo.state,
@@ -57,7 +63,12 @@ class BookingAgent:
             manager_id=getattr(self.manager, "id", None),
             resumed=self.convo.greeted,
             model=self.brain.model,
+            voice_in=listening,
+            voice_out=speaking,
         )
+        for note in self.voice.problems() if self.voice else []:
+            print(f"WARNING: {note}")
+            self.journal.write("voice_warning", level="warning", note=note)
 
         # Only two chats are ever listened to: the manager's and Saved Messages.
         self.client.add_event_handler(
@@ -71,6 +82,10 @@ class BookingAgent:
         print(
             f"Agent running as @{getattr(me, 'username', me.id)}; "
             f"manager @{self.settings.manager_username}; state: {self.convo.state}."
+        )
+        print(
+            f"Voice: listening {'on' if listening else 'off'}, "
+            f"speaking {'on' if speaking else 'off'} (the recap is always text)."
         )
         print("Escalations arrive in Saved Messages; reply there to continue.")
 
@@ -94,21 +109,39 @@ class BookingAgent:
     async def _on_manager(self, event) -> None:
         if not event.is_private:
             return
-        text = (event.raw_text or "").strip()
+
+        spoken = getattr(event, "voice", None) is not None
+        if spoken:
+            text = await self._listen(event)
+            if text is None:
+                # Nothing to work with: ask in text and leave it there.
+                await self._send(
+                    guardrails.voice_unreadable_line(), note="stt_failed", speak=False
+                )
+                return
+        else:
+            text = (event.raw_text or "").strip()
+
         if not text:
-            # Phase 1 is text only: attachments are logged and ignored, never opened.
+            # Photos, files and the like are logged and never opened.
             self.journal.write(
                 "received_ignored", reason="non-text message", state=self.convo.state
             )
             return
 
+        self.convo.last_manager_voice = spoken
         self.convo.add(ROLE_MANAGER, text)
         self.convo.reminder_sent = False
         if guardrails.wants_phone(text):
             self.convo.phone_requested = True
         self._save()
         self.journal.write(
-            "received", direction="in", chat="manager", text=text, state=self.convo.state
+            "received",
+            direction="in",
+            chat="manager",
+            text=text,
+            voice=spoken or None,
+            state=self.convo.state,
         )
 
         if self.convo.pending_operator:
@@ -118,6 +151,29 @@ class BookingAgent:
         if self._debounce and not self._debounce.done():
             self._debounce.cancel()
         self._debounce = asyncio.create_task(self._debounced_respond())
+
+    async def _listen(self, event) -> str | None:
+        """Download a voice note and turn it into text, or None if we cannot."""
+        if self.voice is None or not self.voice.can_listen:
+            self.journal.write(
+                "voice_unavailable", level="warning", direction="in", reason="no stt"
+            )
+            return None
+        path = self.voice.workdir / f"in-{getattr(event, 'id', 0)}.ogg"
+        try:
+            await self.client.download_media(event.message, file=str(path))
+        except Exception as exc:
+            self.journal.write("stt_failed", level="warning", error=str(exc)[:300])
+            return None
+
+        text = await self.voice.transcribe(path)
+        if text is None:
+            return None
+        self.journal.write(
+            "voice_received", direction="in", chat="manager", transcript=text
+        )
+        print(f"Voice note transcribed: {text[:80]}")
+        return text
 
     async def _debounced_respond(self) -> None:
         try:
@@ -316,9 +372,11 @@ class BookingAgent:
 
             batch = self.convo.manager_batch()
             last_manager = "\n".join(batch) or self.convo.last_manager_text()
+            # Answer in the medium they used - except the recap, always text.
+            speak = self.convo.last_manager_voice
 
             if decision is None:
-                await self._send(guardrails.holding_line())
+                await self._send(guardrails.holding_line(), speak=speak)
                 await self._escalate(
                     "invalid_output",
                     "The model did not return usable output twice in a row.",
@@ -366,7 +424,7 @@ class BookingAgent:
             if decision.off_topic and not secret:
                 line = guardrails.off_topic_line(booking, self.convo.off_topic_count)
                 self.convo.off_topic_count += 1
-                await self._send(line, decision=decision, note="off_topic")
+                await self._send(line, decision=decision, note="off_topic", speak=speak)
                 return
 
             # 2. "Are you a bot?" - honest, and the wording comes from the code.
@@ -375,6 +433,7 @@ class BookingAgent:
                     guardrails.bot_disclosure_line(booking),
                     decision=decision,
                     note="bot_disclosure",
+                    speak=speak,
                 )
                 return
 
@@ -386,7 +445,7 @@ class BookingAgent:
                     else change or ("payment" if payment else "other")
                 )
                 await self._send(
-                    guardrails.holding_line(), decision=decision, note="holding"
+                    guardrails.holding_line(), decision=decision, note="holding", speak=speak
                 )
                 await self._escalate(topic, decision.understood, batch, decision)
                 return
@@ -408,7 +467,7 @@ class BookingAgent:
                         "recap_withheld", level="warning", conflicts=clash, text=last_manager
                     )
                     await self._send(
-                        guardrails.holding_line(), decision=decision, note="holding"
+                        guardrails.holding_line(), decision=decision, note="holding", speak=speak
                     )
                     await self._escalate(
                         "time_mismatch",
@@ -441,7 +500,7 @@ class BookingAgent:
                         "reply_blocked", level="warning", conflicts=clash, text=reply
                     )
                     await self._send(
-                        guardrails.holding_line(), decision=decision, note="holding"
+                        guardrails.holding_line(), decision=decision, note="holding", speak=speak
                     )
                     await self._escalate(
                         "reply_conflict",
@@ -453,7 +512,7 @@ class BookingAgent:
                     return
 
             if not reply:
-                await self._send(guardrails.holding_line(), decision=decision)
+                await self._send(guardrails.holding_line(), decision=decision, speak=speak)
                 await self._escalate(
                     "other",
                     "The drafted reply was blocked by the guardrails.",
@@ -467,6 +526,8 @@ class BookingAgent:
                 decision=decision,
                 new_state=new_state,
                 note="recap" if recap else None,
+                # The recap is always written: it has to be checkable.
+                speak=speak and not recap,
             )
 
     # --- outgoing --------------------------------------------------------
@@ -479,8 +540,11 @@ class BookingAgent:
         new_state: str | None = None,
         note: str | None = None,
         event: str = "sent",
+        speak: bool = False,
     ) -> None:
-        await self.client.send_message(self.manager, text)
+        spoken = await self._say(text) if speak else False
+        if not spoken:
+            await self.client.send_message(self.manager, text)
         self.convo.add(ROLE_AGENT, text)
         self.convo.mark_sent()
         self.convo.reminder_sent = False
@@ -497,10 +561,35 @@ class BookingAgent:
             "text": text,
             "state": self.convo.state,
             "note": note,
+            "voice": spoken or None,
         }
         if decision is not None:
             fields.update(decision.as_log())
         self.journal.write(event, **fields)
+
+    async def _say(self, text: str) -> bool:
+        """Send `text` as a voice note. False means the caller should write it."""
+        if self.voice is None or not self.voice.can_speak:
+            self.journal.write(
+                "voice_unavailable", level="warning", direction="out", reason="no tts"
+            )
+            return False
+        try:
+            async with self.client.action(self.manager, "record-voice"):
+                clip = await self.voice.speak(text)
+                if clip is None:
+                    return False
+                await self.client.send_file(
+                    self.manager,
+                    str(clip.path),
+                    voice_note=True,
+                    attributes=[DocumentAttributeAudio(duration=clip.seconds, voice=True)],
+                )
+        except Exception as exc:
+            # A failed voice note must never cost us the message itself.
+            self.journal.write("tts_failed", level="warning", error=str(exc)[:300])
+            return False
+        return True
 
     async def _escalate(
         self,

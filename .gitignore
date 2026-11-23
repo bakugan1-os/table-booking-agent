@@ -16,6 +16,9 @@ __pycache__/
 logs/
 *.log
 
+# Voice notes in and out
+voice/
+
 # Conversation state (contains the chat history)
 state.json
 state.json.bak

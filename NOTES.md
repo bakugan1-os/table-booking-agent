@@ -2,8 +2,9 @@
 
 ## Scope
 
-Text only. No voice notes, no calls, no images, no booking websites. One
-restaurant, one manager, one table.
+One restaurant, one manager, one table. Phase 1 is text; phase 2 adds voice
+notes in both directions (see below). No calls, no images, no booking
+websites.
 
 ## Decisions
 
@@ -235,6 +236,44 @@ configured. Ten clean replies out of ten is the bar; anything less will show
 up as `llm_empty`, `llm_invalid` or an `invalid_output` escalation in the
 middle of a conversation with a restaurant.
 
+## Voice (phase 2)
+
+**Transcribe, then forget it was audio.** A voice note is downloaded,
+handed to Whisper, and from that point on it is an ordinary manager
+message: same debounce, same guardrails, same state machine. Nothing
+downstream knows the difference, and the transcript is journalled as
+`voice_received` so a run can be read back as text. The one thing the
+transcript carries with it is `last_manager_voice`, which decides the
+medium of the reply.
+
+**Answer in kind, except the recap.** Voice in, voice out; text in, text
+out. The confirmation recap is always written, because it is the message
+that has to be checkable at a glance - and because a wrong detail in a
+voice note is much harder to spot than in a line of text.
+
+**Both halves are optional and fail towards text.** Listening needs
+`STT_BASE_URL`, `STT_API_KEY` and `STT_MODEL`; speaking needs edge-tts (no
+key, Microsoft's voices) and ffmpeg, because Telegram voice notes must be
+ogg/opus and edge-tts hands back mp3. Whatever is missing is reported once
+at startup in plain English, and the agent carries on in text. If Whisper
+fails on a particular note the agent asks the manager to type it - in text,
+since a voice reply saying "I couldn't hear you" is a poor joke. If
+synthesis fails, that message goes out as text and `tts_failed` lands in the
+journal. The one thing that must never happen is a message not going out at
+all.
+
+**edge-tts, not a paid TTS.** No key, decent British voices, and
+`en-GB-SoniaNeural` is the closest to the register the agent writes in.
+Encoding is `libopus` at 32k mono 48kHz, which is what Telegram's own
+clients send; the duration comes from ffprobe when it is there, so the
+voice note does not show as 0:00.
+
+**What is not done.** Voice notes are transcribed, never replayed to the
+operator: escalations in Saved Messages are text, with the transcript
+quoted. The agent does not detect the manager's language, and it does not
+listen to anything but voice notes - video notes, music and files are
+ignored exactly as before.
+
 ## Known limits
 
 - One manager, one booking; nothing multi-restaurant.
@@ -242,15 +281,17 @@ middle of a conversation with a restaurant.
   becomes an escalation.
 - The reminder fires once per agent message; it is not a full follow-up
   schedule.
-- Non-text messages from the manager are logged and ignored, so the agent
-  never acknowledges a photo of the menu.
+- Photos, files and video notes from the manager are logged and ignored, so
+  the agent never acknowledges a photo of the menu. Voice notes are handled
+  (phase 2).
 - `state.json` holds the plain conversation history: git-ignored, but not
   encrypted.
 
-## Possible phase 2
+## Possible next steps
 
 - Summarise older history to keep prompts short.
-- Acknowledge non-text messages politely ("I'm afraid I can only read text").
+- Acknowledge photos and files politely ("I'm afraid I can only read text"),
+  the way voice notes are now handled.
 - Extend `tests/test_conversation.py` into a full scripted dry run (a whole
   manager dialogue end to end, asserted turn by turn).
 - Several candidate restaurants, chosen by who answers first.

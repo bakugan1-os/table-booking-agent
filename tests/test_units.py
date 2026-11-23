@@ -618,6 +618,74 @@ check("and the retry carried it", "reasoning_effort" not in fake.calls[1])
 brain, fake = make_brain([RuntimeError("quota exceeded")])
 check("a real error is not swallowed", brain.decide("system", []) is None)
 
+# --- 7c. voice, without Whisper, edge-tts or ffmpeg -------------------------
+
+import asyncio  # noqa: E402
+
+from agent.config import DEFAULT_STT_MODEL, DEFAULT_TTS_VOICE  # noqa: E402
+from agent.voice import Voice  # noqa: E402
+
+
+def make_settings(**kw) -> Settings:
+    base = dict(
+        api_id=1, api_hash="h", manager_username="m",
+        llm_base_url="http://example.invalid", llm_api_key="k", llm_model="model",
+    )
+    base.update(kw)
+    return Settings(**base)
+
+
+voice_journal = Journal(TMP / "logs" / "voice.jsonl")
+silent = Voice(make_settings(), voice_journal, TMP / "voice")
+check("no stt settings, no listening", not silent.can_listen)
+check("the reason is spelled out", any("STT_BASE_URL" in note for note in silent.problems()))
+check("stt model has a default", make_settings().stt_model == DEFAULT_STT_MODEL)
+check("the voice is British by default", DEFAULT_TTS_VOICE == "en-GB-SoniaNeural")
+check("transcribing without stt returns nothing", asyncio.run(silent.transcribe(TMP / "x.ogg")) is None)
+
+hearing = Voice(
+    make_settings(
+        stt_base_url="http://example.invalid", stt_api_key="k", stt_model="whisper-large-v3"
+    ),
+    voice_journal,
+    TMP / "voice",
+)
+check("stt settings switch listening on", hearing.can_listen)
+
+# ffmpeg decides whether we can speak at all
+hearing.ffmpeg = None
+check("no ffmpeg, no voice notes", not hearing.can_speak)
+check("and the reason names ffmpeg", any("ffmpeg" in note for note in hearing.problems()))
+check("speaking without ffmpeg returns nothing", asyncio.run(hearing.speak("hello")) is None)
+hearing.ffmpeg = "ffmpeg"
+check("with ffmpeg and edge-tts it can speak", hearing.can_speak)
+check("and then it has nothing to warn about", hearing.problems() == [])
+
+
+class BoomTranscriptions:
+    def create(self, **kwargs):
+        raise RuntimeError("whisper is down")
+
+
+hearing._stt = SimpleNamespace(audio=SimpleNamespace(transcriptions=BoomTranscriptions()))
+clip_path = TMP / "voice" / "in.ogg"
+clip_path.parent.mkdir(parents=True, exist_ok=True)
+clip_path.write_bytes(b"not really audio")
+check("a failed transcription is survivable", asyncio.run(hearing.transcribe(clip_path)) is None)
+check(
+    "and it is journalled",
+    '"stt_failed"' in (TMP / "logs" / "voice.jsonl").read_text(encoding="utf-8"),
+)
+
+
+class EmptyTranscriptions:
+    def create(self, **kwargs):
+        return SimpleNamespace(text="   ")
+
+
+hearing._stt = SimpleNamespace(audio=SimpleNamespace(transcriptions=EmptyTranscriptions()))
+check("an empty transcript counts as a failure", asyncio.run(hearing.transcribe(clip_path)) is None)
+
 # --- 8. the prompt ----------------------------------------------------------
 
 prompt = build_system_prompt(facts, "negotiating", None)

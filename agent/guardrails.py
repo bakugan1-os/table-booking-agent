@@ -195,6 +195,14 @@ def sanitize(
 
 # --- canned lines: the code owns these, the model never writes them ----------
 
+def voice_unreadable_line() -> str:
+    """When a voice note cannot be transcribed - asked in text, on purpose."""
+    return (
+        "I'm terribly sorry, your voice note didn't come through clearly at my "
+        "end. Would you mind typing it?"
+    )
+
+
 def holding_line() -> str:
     return "Let me check that with the guest and I will come straight back to you."
 

@@ -36,6 +36,8 @@ class Conversation:
     off_topic_count: int = 0
     #: How this ended: "booked", "no_booking", or None while it is still open.
     outcome: str | None = None
+    #: The manager's last message was a voice note, so we answer in kind.
+    last_manager_voice: bool = False
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)
