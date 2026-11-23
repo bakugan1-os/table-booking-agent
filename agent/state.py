@@ -34,6 +34,8 @@ class Conversation:
     pending_change_value: str | None = None
     clarifications: int = 0
     off_topic_count: int = 0
+    #: How this ended: "booked", "no_booking", or None while it is still open.
+    outcome: str | None = None
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)
@@ -120,7 +122,12 @@ class Conversation:
     # --- state machine ---------------------------------------------------
 
     def next_state(
-        self, proposed: str, *, restaurant_known: bool, manager_confirmed: bool = False
+        self,
+        proposed: str,
+        *,
+        restaurant_known: bool,
+        manager_confirmed: bool = False,
+        manager_refused: bool = False,
     ) -> str:
         """Validate the LLM's proposal: forward or stay, never backwards.
 
@@ -128,6 +135,10 @@ class Conversation:
         saying the booking is made - a free table is not a booking. 'done' is
         only reachable from 'confirmed'.
         """
+        # A refusal ends the conversation wherever it finds it: there is
+        # nothing left to negotiate.
+        if manager_refused and not manager_confirmed:
+            return "done"
         # A confirmed booking always goes through 'confirmed', whatever the
         # model proposed: skipping straight to 'done' would swallow the recap.
         if (

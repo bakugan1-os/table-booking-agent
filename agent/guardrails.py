@@ -122,6 +122,35 @@ def fix_possessive(text: str) -> str:
     return _POSSESSIVE.sub(lambda m: f"under the name {m.group(1)}", text)
 
 
+# Phrases that put the agent on the wrong side of the conversation. The
+# agent is the one who went away to check, so it is the manager who waited.
+_ROLE_SLIPS = (
+    (
+        re.compile(
+            r"\b(?:thanks?|thank you)(?: so much| very much)? for (?:coming|getting) back to me\b",
+            re.IGNORECASE,
+        ),
+        "thank you for waiting",
+    ),
+    (
+        re.compile(r"\bwe look forward to seeing you\b", re.IGNORECASE),
+        "we're looking forward to it",
+    ),
+)
+
+
+def fix_role_phrases(text: str) -> str:
+    body = text or ""
+    for pattern, replacement in _ROLE_SLIPS:
+        def swap(match: re.Match, replacement: str = replacement) -> str:
+            before = body[: match.start()].rstrip()
+            starts_sentence = not before or before[-1] in ".!?"
+            return replacement.capitalize() if starts_sentence else replacement
+
+        body = pattern.sub(swap, body)
+    return body
+
+
 def fix_salutation(text: str, word: str) -> str:
     """'Good morning' sent at 9pm is the kind of slip a guest would notice."""
     return _SALUTATION.sub(lambda m: f"{m.group(1)}Good {word}", text, count=1)
@@ -140,6 +169,7 @@ def sanitize(
     text = _MARKDOWN.sub("", text)
     text = normalise_times(text, booking)
     text = fix_possessive(text)
+    text = fix_role_phrases(text)
     if greeting:
         text = fix_salutation(text, greeting)
     text = re.sub(r"\s+", " ", text).strip()

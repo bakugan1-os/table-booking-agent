@@ -125,6 +125,14 @@ booking "confirmed" at a different time escalates instead of being read back
 wrongly. The prompt says the same thing in words, but the prompt is not where
 this is enforced.
 
+**Every conversation ends somewhere.** `manager_refused` in the contract
+closes the conversation from wherever it is: a final no ends in `done` with
+`outcome: "no_booking"`, a confirmation ends in `confirmed` with
+`outcome: "booked"`, and a `booking_outcome` line with the agreed booking
+goes to the journal either way. A confirmation outranks a refusal in the
+same decision. Before this, a refusal simply left the agent sitting in
+`negotiating` with the reminder watchdog ticking.
+
 **The agent speaks for the guest.** "We look forward to seeing you" is the
 restaurant's line, and it went out in the recap. The recap now ends "Many
 thanks, we look forward to it", the prompt has a paragraph on whose side the

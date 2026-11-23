@@ -221,6 +221,36 @@ check(
     guardrails.fix_possessive("under the name Test Guest") == "under the name Test Guest",
 )
 
+# the agent is the one who went away to check, so the manager did the waiting
+check(
+    "'coming back to me' rewritten",
+    guardrails.fix_role_phrases("Thank you for coming back to me. 9.30pm suits us.")
+    == "Thank you for waiting. 9.30pm suits us.",
+)
+check(
+    "'getting back to me' too",
+    "Thank you for waiting" in guardrails.fix_role_phrases("Thanks so much for getting back to me!"),
+)
+check(
+    "mid-sentence stays lower case",
+    guardrails.fix_role_phrases("Lovely, and thank you for coming back to me.")
+    == "Lovely, and thank you for waiting.",
+)
+check(
+    "the restaurant's farewell is rewritten",
+    guardrails.fix_role_phrases("We look forward to seeing you.")
+    == "We're looking forward to it.",
+)
+check(
+    "ordinary thanks untouched",
+    guardrails.fix_role_phrases("Thank you for holding the table.")
+    == "Thank you for holding the table.",
+)
+check(
+    "sanitize applies it on the wire",
+    "waiting" in guardrails.sanitize("Thank you for coming back to me.", allow_phone=False),
+)
+
 # the salutation follows London's clock, not the model's mood
 LONDON = ZoneInfo("Europe/London")
 
@@ -362,6 +392,20 @@ check(
 )
 c.state = "requesting"
 check("done blocked outside confirmed", c.next_state("done", restaurant_known=True) == "requesting")
+# a final refusal ends it wherever it lands
+check(
+    "a refusal reaches done",
+    c.next_state("negotiating", restaurant_known=False, manager_refused=True) == "done",
+)
+check(
+    "a refusal needs no restaurant",
+    c.next_state("done", restaurant_known=False, manager_refused=True) == "done",
+)
+check(
+    "a confirmation outranks a refusal",
+    c.next_state("done", restaurant_known=True, manager_confirmed=True, manager_refused=True)
+    == "confirmed",
+)
 c.state = "confirmed"
 check("done allowed from confirmed", c.next_state("done", restaurant_known=True) == "done")
 check("garbage state ignored", c.next_state("banana", restaurant_known=True) == "confirmed")
@@ -476,6 +520,11 @@ good = """Sure! Here you go:
 d, problem = _validate(_extract_json(good))
 check("json parsed from fenced chatter", d is not None)
 check("manager_confirmed defaults false", d is not None and d.manager_confirmed is False)
+check("manager_refused defaults false", d is not None and d.manager_refused is False)
+d_no, _ = _validate(
+    _extract_json('{"reply": "bye", "next_state": "done", "manager_refused": true}')
+)
+check("manager_refused parsed", d_no is not None and d_no.manager_refused is True)
 d_ok, _ = _validate(
     _extract_json('{"reply": "hi", "next_state": "confirmed", "manager_confirmed": true}')
 )

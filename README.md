@@ -132,8 +132,11 @@ checks by name.
    is not a booking - and entering it sends a recap built in code, carrying
    all five fields: party size, time, date, restaurant, guest name. The model
    never writes that message and cannot skip it.
-4. In `done` the agent still answers the manager, briefly and politely.
-5. After 10 minutes of silence it sends **one** polite nudge, never more.
+4. A final no from the restaurant also ends the conversation: `done` with
+   `outcome: "no_booking"` in `state.json`, against `"booked"` for a table
+   secured. Either way a `booking_outcome` line lands in the journal.
+5. In `done` the agent still answers the manager, briefly and politely.
+6. After 10 minutes of silence it sends **one** polite nudge, never more.
 
 ## When it needs you
 

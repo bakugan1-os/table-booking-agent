@@ -90,7 +90,9 @@ def main() -> int:
         print(
             f"Resuming from {STATE_FILE.name}: state={convo.state}, "
             f"messages={len(convo.history)}, "
-            f"pending_operator={convo.pending_operator}."
+            f"pending_operator={convo.pending_operator}"
+            + (f", outcome={convo.outcome}" if convo.outcome else "")
+            + "."
         )
 
     print(

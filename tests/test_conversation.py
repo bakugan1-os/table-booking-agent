@@ -107,6 +107,7 @@ def decision(**kw) -> Decision:
         change_value=None,
         asked_if_bot=False,
         manager_confirmed=False,
+        manager_refused=False,
         restaurant_name=None,
     )
     base.update(kw)
@@ -695,6 +696,65 @@ async def main() -> int:
     await manager_says_to(agent, "We could do 9.30pm instead?")
     await agent._on_saved(SimpleNamespace(id=78, raw_text="No, keep it at 9pm please."))
     check("a no leaves the booking alone", convo15.agreed["time"] == "21:00")
+
+    # 20. a final refusal closes the conversation
+    convo21 = Conversation()
+    convo21.state = "negotiating"
+    convo21.restaurant_name = "The Ivy"
+    agent, client, convo21 = build_raw(
+        [
+            decision(
+                next_state="negotiating",  # the model does not even have to say done
+                manager_refused=True,
+                understood="they have nothing at all tonight",
+                reply="That's a shame, but thank you for checking.",
+            )
+        ],
+        convo21,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo21.add("manager", "Sorry, we have nothing at all tonight, I'm afraid.")
+    await agent._respond()
+    check("a refusal closes it", convo21.state == "done")
+    check("outcome recorded", convo21.outcome == "no_booking")
+    check("the agent still answers politely", client.sent[-1][0] == "MANAGER")
+    check("no recap on a refusal", "Just to confirm" not in client.sent[-1][1])
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    outcomes = [line for line in lines if '"booking_outcome"' in line]
+    check("the outcome is journalled", any('"no_booking"' in line for line in outcomes))
+    check("outcome survives a restart", Conversation.load(conv_mod.STATE_FILE).outcome == "no_booking")
+
+    # 20b. a successful booking records the other outcome
+    convo22 = Conversation()
+    convo22.state = "negotiating"
+    convo22.restaurant_name = "The Ivy"
+    agent, client, convo22 = build_raw(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely.")],
+        convo22,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo22.add("manager", "All booked for 9pm, see you then.")
+    await agent._respond()
+    check("booked outcome recorded", convo22.outcome == "booked")
+    check("and it still recaps", "Just to confirm" in client.sent[-1][1])
+
+    # 20c. the agent thanks the manager for waiting, not for coming back
+    convo23 = Conversation()
+    convo23.state = "negotiating"
+    convo23.restaurant_name = "The Ivy"
+    agent, client, convo23 = build_raw(
+        [decision(reply="Thank you for coming back to me. 9pm suits us nicely.")],
+        convo23,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo23.add("manager", "9pm is free.")
+    await agent._respond()
+    sent_text = client.sent[-1][1]
+    check("the slip is fixed on the wire", "coming back to me" not in sent_text)
+    check("and reads as the agent", sent_text.startswith("Thank you for waiting"))
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

@@ -262,6 +262,28 @@ class BookingAgent:
         )
         print(f"Operator approved a change: {key} {before} -> {after}.")
 
+    def _record_outcome(self, new_state: str, decision: Decision, last_manager: str) -> None:
+        """Write down how this ended, once, the first time we know."""
+        if self.convo.outcome:
+            return
+        if new_state == "confirmed":
+            outcome = "booked"
+        elif new_state == "done":
+            outcome = "no_booking"
+        else:
+            return
+
+        self.convo.outcome = outcome
+        self.journal.write(
+            "booking_outcome",
+            outcome=outcome,
+            state=new_state,
+            understood=decision.understood,
+            manager=last_manager,
+            booking=dict(self.convo.agreed),
+        )
+        print(f"Outcome: {outcome}.")
+
     def _already_agreed(self, decision: Decision) -> bool:
         """True when the model is asking to approve what is already agreed."""
         topic = decision.requested_change
@@ -374,7 +396,9 @@ class BookingAgent:
                 decision.next_state,
                 restaurant_known=bool(self.convo.restaurant_name),
                 manager_confirmed=decision.manager_confirmed,
+                manager_refused=decision.manager_refused,
             )
+            self._record_outcome(new_state, decision, last_manager)
             recap = new_state == "confirmed" and self.convo.state != "confirmed"
             if recap:
                 # Do not confirm a booking the manager described differently.

@@ -32,6 +32,7 @@ class Decision:
     change_value: str | None
     asked_if_bot: bool
     manager_confirmed: bool
+    manager_refused: bool
     restaurant_name: str | None
 
     def as_log(self) -> dict:
@@ -45,6 +46,7 @@ class Decision:
             "change_value": self.change_value,
             "asked_if_bot": self.asked_if_bot,
             "manager_confirmed": self.manager_confirmed,
+            "manager_refused": self.manager_refused,
         }
 
 
@@ -123,6 +125,7 @@ def _validate(data: dict | None) -> tuple[Decision | None, str]:
             change_value=change_value,
             asked_if_bot=_as_bool(data.get("asked_if_bot")),
             manager_confirmed=_as_bool(data.get("manager_confirmed")),
+            manager_refused=_as_bool(data.get("manager_refused")),
             restaurant_name=restaurant_name,
         ),
         "",
