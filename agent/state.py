@@ -32,6 +32,7 @@ class Conversation:
     pending_operator: bool = False
     pending_topic: str | None = None
     pending_change_value: str | None = None
+    clarifications: int = 0
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)

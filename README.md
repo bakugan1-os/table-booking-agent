@@ -135,7 +135,10 @@ Topic: deposit | state: negotiating
 Reply in this chat and I will carry on.
 ```
 
-Reply in Saved Messages and it continues immediately. A clear **yes** moves
+Reply in Saved Messages and it continues immediately. Answer **yes** or
+**no** (English, Ukrainian or Russian); anything it cannot read as either
+gets one question back - "Sorry, is that a yes to 9.30pm?" - and the agent
+keeps waiting rather than guessing. A clear **yes** moves
 the agreed booking (and only then): the new time or party size is written to
 `state.json` and journalled as `change_approved`, and every later message -
 including the confirmation recap - uses the agreed values, not what is still
@@ -159,6 +162,9 @@ Enforced in code, not just asked for in the prompt:
   go to you
 - no change (time, party size, deposit, payment) is accepted without your
   reply in Saved Messages
+- a reply offering a time or party size you have not approved is never sent:
+  it is dropped and escalated to you instead, and the same check stops a
+  recap when the manager's confirmation names a different time
 - "are you a bot?" gets an honest fixed answer: an AI assistant arranging
   this on behalf of the guest
 - links and attachments are never opened; non-text messages are logged and

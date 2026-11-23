@@ -16,6 +16,7 @@ from .state import ROLE_AGENT, ROLE_MANAGER, ROLE_OPERATOR, Conversation
 DEBOUNCE_SECONDS = 5
 REMINDER_AFTER_SECONDS = 10 * 60
 WATCHDOG_TICK_SECONDS = 20
+MAX_CLARIFICATIONS = 2
 
 
 class BookingAgent:
@@ -151,28 +152,69 @@ class BookingAgent:
 
         topic = self.convo.pending_topic
         if topic and topic not in ("other", "secret", "invalid_output"):
+            verdict = guardrails.operator_verdict(text)
+            if verdict == "unclear":
+                # Never guess what the operator meant: ask again and keep waiting.
+                await self._ask_operator_again(topic)
+                return
             if topic not in self.convo.resolved_changes:
                 self.convo.resolved_changes.append(topic)
-            self._apply_approved_change(topic, text)
+            if verdict == "yes":
+                self._apply_approved_change(topic, text)
+            else:
+                self.journal.write(
+                    "change_declined",
+                    topic=topic,
+                    value=self.convo.pending_change_value,
+                    operator=text,
+                )
+
         self.convo.pending_operator = False
         self.convo.pending_topic = None
         self.convo.pending_change_value = None
+        self.convo.clarifications = 0
         self.convo.reminder_sent = False
         self._save()
 
         await self._respond()
 
+    async def _ask_operator_again(self, topic: str) -> None:
+        """One more try at a yes or no; after that we simply keep waiting."""
+        value = self.convo.pending_change_value
+        self.convo.clarifications += 1
+        if self.convo.clarifications > MAX_CLARIFICATIONS:
+            self.journal.write(
+                "operator_unclear",
+                level="warning",
+                topic=topic,
+                value=value,
+                note="asked twice already, waiting quietly",
+            )
+            self._save()
+            return
+
+        question = f"[Q{self.convo.question_counter}] {guardrails.clarify_line(topic, value)}"
+        message = await self.client.send_message("me", question)
+        self.convo.agent_saved_ids.append(message.id)
+        self._save()
+        self.journal.write(
+            "operator_unclear",
+            level="warning",
+            direction="out",
+            chat="saved",
+            topic=topic,
+            value=value,
+            text=question,
+            attempt=self.convo.clarifications,
+        )
+        print(f"Operator's answer was unclear; asked again about {topic}.")
+
     def _apply_approved_change(self, topic: str, operator_text: str) -> None:
         """The agreed booking moves only here, and only on a clear yes."""
         value = self.convo.pending_change_value
-        approved = guardrails.operator_approves(operator_text)
-        if not approved or not value:
+        if not value:
             self.journal.write(
-                "change_not_applied",
-                topic=topic,
-                approved=approved,
-                value=value,
-                reason="no clear approval" if not approved else "no value to apply",
+                "change_not_applied", topic=topic, reason="no value to apply"
             )
             return
 
@@ -296,6 +338,23 @@ class BookingAgent:
             )
             recap = new_state == "confirmed" and self.convo.state != "confirmed"
             if recap:
+                # Do not confirm a booking the manager described differently.
+                clash = guardrails.conflicting_values(last_manager, booking)
+                if clash:
+                    self.journal.write(
+                        "recap_withheld", level="warning", conflicts=clash, text=last_manager
+                    )
+                    await self._send(
+                        guardrails.holding_line(), decision=decision, note="holding"
+                    )
+                    await self._escalate(
+                        "time_mismatch",
+                        "The manager's confirmation does not match what we agreed: "
+                        + "; ".join(clash),
+                        last_manager,
+                        decision,
+                    )
+                    return
                 # Built from what was agreed, not from facts.yaml: a table
                 # moved to 9.30pm must not be confirmed back as 9pm.
                 reply = guardrails.recap_line(booking)
@@ -311,6 +370,24 @@ class BookingAgent:
                     greeting=greeting,
                     booking=booking.time,
                 )
+                # The agent may not offer the manager anything the operator
+                # has not approved.
+                clash = guardrails.conflicting_values(reply, booking)
+                if clash:
+                    self.journal.write(
+                        "reply_blocked", level="warning", conflicts=clash, text=reply
+                    )
+                    await self._send(
+                        guardrails.holding_line(), decision=decision, note="holding"
+                    )
+                    await self._escalate(
+                        "reply_conflict",
+                        "The drafted reply offered something we have not agreed: "
+                        + "; ".join(clash),
+                        last_manager,
+                        decision,
+                    )
+                    return
 
             if not reply:
                 await self._send(guardrails.holding_line(), decision=decision)

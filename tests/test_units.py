@@ -175,8 +175,9 @@ check(
 )
 check("recap survives an unknown name", "at " in guardrails.recap_line(replace(facts, restaurant_name=None)))
 # the agent speaks for the guest, not for the restaurant
-check("recap is in the guest's voice", "we look forward to it" in recap.lower())
+check("recap is in the guest's voice", "we're looking forward to it" in recap.lower())
 check("recap does not greet as the restaurant", "seeing you" not in recap.lower())
+check("'many thanks' is gone", "many thanks" not in recap.lower())
 check(
     "recap follows the agreed time, not the facts file",
     "9.30pm" in guardrails.recap_line(replace(booked, time="21:30")),
@@ -348,13 +349,22 @@ check("garbage state ignored", c.next_state("banana", restaurant_known=True) == 
 
 # --- 5b. the agreed booking -------------------------------------------------
 
-check("approval: yes", guardrails.operator_approves("yes, go ahead"))
-check("approval: ok", guardrails.operator_approves("ok"))
-check("approval: agreed", guardrails.operator_approves("Agreed, book it."))
-check("rejection: no", not guardrails.operator_approves("no, keep 9pm"))
-check("rejection wins over yes", not guardrails.operator_approves("yes but no, decline it"))
-check("silence is not approval", not guardrails.operator_approves("hmm"))
-check("a question is not approval", not guardrails.operator_approves("what did they say?"))
+check("approval: yes", guardrails.operator_verdict("yes, go ahead") == "yes")
+check("approval: ok", guardrails.operator_verdict("ok") == "yes")
+check("approval: agreed", guardrails.operator_verdict("Agreed, book it.") == "yes")
+# the dry run was answered in Ukrainian and the change silently did not land
+check("approval: tak", guardrails.operator_verdict("так") == "yes")
+check("approval: dobre", guardrails.operator_verdict("добре, давай") == "yes")
+check("rejection: no", guardrails.operator_verdict("no, keep 9pm") == "no")
+check("rejection: ni", guardrails.operator_verdict("ні") == "no")
+check("rejection wins over yes", guardrails.operator_verdict("yes but no, decline it") == "no")
+check("silence is unclear", guardrails.operator_verdict("hmm") == "unclear")
+check("a question is unclear", guardrails.operator_verdict("what did they say?") == "unclear")
+check("maybe is unclear", guardrails.operator_verdict("можливо") == "unclear")
+check("approves wrapper still works", guardrails.operator_approves("yes"))
+check("clarify names the time", guardrails.clarify_line("time", "9.30pm") == "Sorry, is that a yes to 9.30pm? Please reply yes or no.")
+check("clarify normalises 24h", "9.30pm" in guardrails.clarify_line("time", "21:30"))
+check("clarify handles party size", "a table for 4" in guardrails.clarify_line("party_size", "4"))
 
 check("clock: 24h", guardrails.parse_clock("21:30") == "21:30")
 check("clock: british", guardrails.parse_clock("9.30pm") == "21:30")
@@ -365,6 +375,32 @@ check("clock: nothing there", guardrails.parse_clock("sometime later") is None)
 check("party: digits", guardrails.parse_party_size("4") == 4)
 check("party: words", guardrails.parse_party_size("four guests") == 4)
 check("party: nonsense", guardrails.parse_party_size("a few") is None)
+
+# nothing may be offered to the manager that is not in the agreed booking
+at_nine = replace(facts, time="21:00", restaurant_name="The Ivy")
+check("agreed time passes", guardrails.conflicting_values("a table at 9pm?", at_nine) == [])
+check(
+    "a different time is caught",
+    guardrails.conflicting_values("could we do 9.30pm?", at_nine)
+    == ["time 9.30pm, agreed 9pm"],
+)
+check(
+    "24h form is caught too",
+    guardrails.conflicting_values("confirm 21:30 please", at_nine)
+    == ["time 9.30pm, agreed 9pm"],
+)
+check("agreed party passes", guardrails.conflicting_values("a table for two", at_nine) == [])
+check(
+    "a different party is caught",
+    guardrails.conflicting_values("a table for four", at_nine)
+    == ["party size 4, agreed 2"],
+)
+check("dates are not times", guardrails.conflicting_values("on Monday 23 November", at_nine) == [])
+check("no numbers, no conflict", guardrails.conflicting_values("Thank you very much.", at_nine) == [])
+check(
+    "both can clash at once",
+    len(guardrails.conflicting_values("a table for four at 10pm", at_nine)) == 2,
+)
 
 agreed = Conversation()
 agreed.ensure_agreed(facts)

@@ -94,6 +94,26 @@ escalation on that topic, and a clear yes from the operator (`operator_approves`
 `change_approved` with `from`/`to`; refusals and unreadable values become
 `change_not_applied`.
 
+**An unclear operator answer is asked about, never assumed.** The fourth dry
+run was answered "так" in Saved Messages. The English-only word list read
+that as "no clear approval", the agreed time stayed at 9pm - and the model,
+which had the same reply in its history as `[OPERATOR] так`, went ahead and
+offered the manager 9.30pm. So: `operator_verdict` returns yes, no or
+unclear (and knows Ukrainian and Russian yes/no words); unclear sends one
+clarifying question back to Saved Messages ("Sorry, is that a yes to
+9.30pm?") and keeps waiting rather than calling the model, with a cap of two
+clarifications before it simply waits quietly.
+
+**The model can no longer get ahead of the agreed booking.**
+`conflicting_values()` compares the clock times and party sizes in a piece of
+text against the agreed booking, and runs on both sides: on the agent's own
+draft, so a time the operator has not approved is never offered to the
+manager (the draft is dropped, the manager gets the holding line, the
+operator gets the reason), and on the manager's message before a recap, so a
+booking "confirmed" at a different time escalates instead of being read back
+wrongly. The prompt says the same thing in words, but the prompt is not where
+this is enforced.
+
 **The agent speaks for the guest.** "We look forward to seeing you" is the
 restaurant's line, and it went out in the recap. The recap now ends "Many
 thanks, we look forward to it", the prompt has a paragraph on whose side the

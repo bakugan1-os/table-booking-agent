@@ -207,7 +207,7 @@ def recap_line(booking: Facts) -> str:
     return (
         f"Wonderful, thank you. Just to confirm: a table for {booking.party_word} "
         f"at {when}{where}, under the name {booking.guest_name}. "
-        "Many thanks, we look forward to it."
+        "Thanks so much - we're looking forward to it."
     )
 
 
@@ -223,22 +223,41 @@ def recap_missing(text: str, booking: Facts) -> list[str]:
     return [field for field, value in expected.items() if value and value not in text]
 
 
+# The operator answers in whatever language is to hand - the first dry run
+# with an escalation was answered "так", which no English word list catches.
 _APPROVES = re.compile(
     r"\b(yes|yep|yeah|ok|okay|agreed?|approved?|go ahead|fine|do it|sure"
-    r"|accept|book it|confirm it)\b",
+    r"|accept|book it|confirm it|confirmed"
+    r"|так|да|ага|ок|окей"
+    r"|гаразд|добре|згоде?н"
+    r"|згодна|згода|підтверджую"
+    r"|давай|звісно|авжеж"
+    r"|хорошо|подтверждаю|согласен)\b",
     re.IGNORECASE,
 )
 _REJECTS = re.compile(
-    r"\b(no|nope|don't|do not|decline|refuse|reject|cancel|leave it)\b",
+    r"\b(no|nope|don't|do not|decline|refuse|reject|cancel|leave it"
+    r"|ні|нє|нет"
+    r"|не треба|не згоден"
+    r"|не погоджуюсь"
+    r"|відмов|скасуй"
+    r"|не надо|не согласен)\b",
     re.IGNORECASE,
 )
 
 
+def operator_verdict(text: str) -> str:
+    """'yes', 'no' or 'unclear'. Anything unclear is asked again, never assumed."""
+    body = text or ""
+    if _REJECTS.search(body):
+        return "no"
+    if _APPROVES.search(body):
+        return "yes"
+    return "unclear"
+
+
 def operator_approves(text: str) -> bool:
-    """A change is applied only on a clear yes; anything else leaves it alone."""
-    if _REJECTS.search(text or ""):
-        return False
-    return bool(_APPROVES.search(text or ""))
+    return operator_verdict(text) == "yes"
 
 
 def parse_clock(value: str) -> str | None:
@@ -254,6 +273,50 @@ def parse_clock(value: str) -> str | None:
     if match:
         return f"{int(match.group(1)):02d}:{int(match.group(2)):02d}"
     return None
+
+
+_BRITISH_TIME = re.compile(r"\b(\d{1,2})(?:\.(\d{2}))?(am|pm)\b", re.IGNORECASE)
+
+
+def conflicting_values(text: str, booking: Facts) -> list[str]:
+    """Times or party sizes in `text` that are not what has been agreed.
+
+    Used both ways: on our own draft, so the agent never offers the manager a
+    time the operator has not approved, and on the manager's message, so a
+    recap never confirms something they did not say.
+    """
+    conflicts: list[str] = []
+    body = normalise_times(text or "", booking.time)
+
+    agreed_time = booking.time_human.lower()
+    for match in _BRITISH_TIME.finditer(body):
+        found = match.group(0).lower()
+        if found != agreed_time:
+            conflicts.append(f"time {found}, agreed {agreed_time}")
+
+    party = re.search(r"\btable for ([\w-]+)", body, re.IGNORECASE) or re.search(
+        r"\bfor ([\w-]+) (?:people|guests|of us)\b", body, re.IGNORECASE
+    )
+    if party:
+        size = parse_party_size(party.group(1))
+        if size is not None and size != booking.party_size:
+            conflicts.append(f"party size {size}, agreed {booking.party_size}")
+
+    return sorted(set(conflicts))
+
+
+def clarify_line(topic: str, value: str | None) -> str:
+    """Asked in Saved Messages when the operator's answer could go either way."""
+    pretty = value or topic
+    if topic == "time":
+        parsed = parse_clock(value or "")
+        if parsed:
+            pretty = human_time(parsed)
+    elif topic == "party_size":
+        size = parse_party_size(value or "")
+        if size is not None:
+            pretty = f"a table for {size}"
+    return f"Sorry, is that a yes to {pretty}? Please reply yes or no."
 
 
 def parse_party_size(value: str) -> int | None:

@@ -366,14 +366,14 @@ async def main() -> int:
     # 15a. the salutation follows London's clock, whatever the model wrote
     expected = f"Good {greeting_word(FACTS.tz)}"
     agent, client, _ = build_raw(
-        [decision(reply="Good morning, might you have a table at 21:00 this evening?")]
+        [decision(reply="Good morning, might you have a table at 17:00 this evening?")]
     )
     await agent.run()
     if agent._watchdog_task:
         agent._watchdog_task.cancel()
     opening = client.sent[0][1]
     check(f"salutation matches London ({expected})", opening.startswith(expected))
-    check("24h time normalised on the wire", "21:00" not in opening and "9pm" in opening)
+    check("24h time normalised on the wire", "17:00" not in opening and "5pm" in opening)
 
     # 15b. a resumed conversation does not greet again
     convo11 = Conversation()
@@ -525,13 +525,88 @@ async def main() -> int:
     check("recap uses the agreed time", "9.30pm" in final)
     check("recap drops the old time", "at 9pm" not in final)
     check("recap still complete", guardrails.recap_missing(final, convo14.booking(agreed_facts)) == [])
-    check("recap in the guest's voice", "we look forward to it" in final.lower())
+    check("recap in the guest's voice", "we're looking forward to it" in final.lower())
     print("agreed recap:", final)
 
     lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
     approvals = [line for line in lines if '"change_approved"' in line]
     check("the approved change is logged", bool(approvals))
     check("the log says what moved", '"from": "21:00"' in approvals[-1] and '"to": "21:30"' in approvals[-1])
+
+    # 19c. an unclear operator answer: ask again, and tell the manager nothing
+    convo16 = Conversation()
+    convo16.state = "negotiating"
+    convo16.greeted = True
+    convo16.restaurant_name = "The Ivy, Covent Garden"
+    agent, client, convo16 = build_raw(
+        [
+            decision(
+                next_state="negotiating",
+                requested_change="time",
+                change_value="21:30",
+                needs_operator=True,
+                understood="9pm is fully booked; they offer 9.30pm",
+                reply="I see, thank you.",
+            ),
+            # Would be used if the agent wrongly carried on - it must not be.
+            decision(next_state="negotiating", reply="9.30pm suits us nicely."),
+        ],
+        convo16,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await manager_says_to(agent, "I'm afraid we're fully booked at 9pm. We could do 9.30pm instead?")
+    sent_before = len(client.sent)
+
+    await agent._on_saved(SimpleNamespace(id=90, raw_text="hmm"))
+    clarification = client.sent[-1][1]
+    check("the operator is asked again", client.sent[-1][0] == "me")
+    check("the question names the time", "yes to 9.30pm" in clarification)
+    check("only one new message went out", len(client.sent) == sent_before + 1)
+    check("nothing went to the manager", all(peer == "me" for peer, _ in client.sent[sent_before:]))
+    check("still waiting on the operator", convo16.pending_operator)
+    check("booking untouched while unclear", convo16.agreed["time"] == "21:00")
+    check("the model was not consulted", len(agent.brain.queue) == 1)
+
+    # ... a clear answer then lands and the booking moves
+    await agent._on_saved(SimpleNamespace(id=91, raw_text="так"))
+    check("'tak' is a yes", convo16.agreed["time"] == "21:30")
+    check("no longer pending", not convo16.pending_operator)
+    check("the agent speaks again", client.sent[-1][0] == "MANAGER")
+
+    # 19d. the agent may not offer a time the operator has not approved
+    convo17 = Conversation()
+    convo17.state = "negotiating"
+    convo17.restaurant_name = "The Ivy"
+    agent, client, convo17 = build_raw(
+        [decision(next_state="negotiating", reply="Could you do 10pm instead?")],
+        convo17,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo17.add("manager", "We are busy at 9pm.")
+    await agent._respond()
+    check("the off-contract offer is not sent", "10pm" not in client.sent[0][1])
+    check("the manager gets the holding line", "check" in client.sent[0][1])
+    check("and it goes to the operator", client.sent[-1][0] == "me")
+    check("the escalation says why", "we have not agreed" in client.sent[-1][1])
+
+    # 19e. a manager confirming a different time does not get a recap
+    convo18 = Conversation()
+    convo18.state = "negotiating"
+    convo18.restaurant_name = "The Ivy"
+    agent, client, convo18 = build_raw(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely.")],
+        convo18,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo18.add("manager", "Booked you in for 10pm, see you then.")
+    await agent._respond()
+    check("no recap on a mismatch", "Just to confirm" not in client.sent[0][1])
+    check("state holds at negotiating", convo18.state == "negotiating")
+    check("mismatch escalated", client.sent[-1][0] == "me" and "does not match" in client.sent[-1][1])
 
     # 19b. without a clear yes, nothing moves
     convo15 = Conversation()
