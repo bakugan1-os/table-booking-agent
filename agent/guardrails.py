@@ -97,6 +97,14 @@ def is_affirmative(text: str) -> bool:
     return operator_verdict(text) == "yes"
 
 
+def ask_restaurant_name_line() -> str:
+    """Asked late, as a note-keeping detail, never as an opening question."""
+    return (
+        "Lovely - and just so I have it right in my notes, could you confirm "
+        "the restaurant's name?"
+    )
+
+
 def ask_typed_name_line() -> str:
     """Asked of the manager when the name is still only something we heard."""
     return (

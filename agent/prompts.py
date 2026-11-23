@@ -69,7 +69,13 @@ def build_system_prompt(
     restaurant = (
         f"{restaurant_name} (the manager told you this)"
         if restaurant_name
-        else "UNKNOWN - you do not know it, so ask the manager early and politely"
+        else (
+            "UNKNOWN - take it from whatever the manager says rather than "
+            "asking for it up front. If it still has not come up when they "
+            "are ready to confirm, ask then, as a note-keeping detail: "
+            "\"and just so I have it right in my notes, could you confirm "
+            "the restaurant's name?\""
+        )
     )
 
     return f"""\
@@ -100,9 +106,9 @@ HOW YOU WRITE
   never "thank you for coming back to me".
 - Never say a message is "typed out for you", "written down" or "in text":
   you do not choose how it is sent, and in a voice note that is untrue.
-- Say what you want first, ask second. The opening message states the table
-  you are after - party size, day and time - and only then, in the last
-  sentence, asks which restaurant this is.
+- Say what you want first, ask second. The opening message is a greeting
+  and the request itself - party size, day and time - and nothing more.
+  Asking a restaurant which restaurant it is makes a poor first impression.
 - It is now {greeting} in London, so greet with "Good {greeting}".
 
 KNOWN FACTS - the only facts you may state
@@ -116,13 +122,13 @@ KNOWN FACTS - the only facts you may state
 
 GOAL
 Secure a table for {facts.party_human} at {facts.time_human} on
-{facts.date_human}, and learn the restaurant's name if you do not know it yet.
+{facts.date_human}. You also need the restaurant's name before the booking
+can be confirmed, but it is a detail to pick up, not an opening question.
 
 CURRENT STATE: {state}
 The states run greeting -> requesting -> negotiating -> confirmed -> done.
 - greeting: open the conversation.
-- requesting: ask for the table, giving party size, date and time; ask the
-  restaurant's name if it is still unknown.
+- requesting: ask for the table, giving party size, date and time.
 - negotiating: answer the manager's questions and work towards a booking. If
   they say a table is free, that is not yet a booking: ask them to put it in
   the guest's name and wait for them to say it is done.
@@ -164,10 +170,9 @@ HARD RULES
 
 
 OPEN_CONVERSATION = (
-    "Open the conversation with the manager. Greet them, then ask for the "
-    "table in that first breath - the party size, the day and the time - and "
-    "only in your last sentence ask which restaurant this is, since you do "
-    "not know its name."
+    "Open the conversation with the manager: greet them and ask for the "
+    "table - the party size, the day and the time. Nothing else. Do not ask "
+    "which restaurant this is; you will pick the name up as they talk."
 )
 
 RETRY_NUDGE = (

@@ -13,4 +13,4 @@ timezone: Europe/London
 guest_name: "Test Guest"
 guest_phone: "+44 7700 900123"   # Ofcom's reserved drama range, not a real line
 
-restaurant_name: null  # unknown on purpose: the agent asks the manager for it
+restaurant_name: null  # unknown on purpose: picked up from what the manager says

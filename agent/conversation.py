@@ -521,6 +521,20 @@ class BookingAgent:
                 )
                 booking = self.convo.booking(self.facts)
 
+            # 3c. Ready to confirm and we still do not know where. Ask now,
+            # as a note-keeping detail, and in writing so it is spelt out.
+            if decision.manager_confirmed and not self.convo.restaurant_name:
+                self.journal.write(
+                    "name_missing", level="warning", manager=last_manager
+                )
+                await self._send(
+                    guardrails.ask_restaurant_name_line(),
+                    decision=decision,
+                    note="ask_restaurant_name",
+                    speak=False,
+                )
+                return
+
             if self.convo.restaurant_name and not self.convo.restaurant_verified:
                 if not self.convo.restaurant_check_sent:
                     self.convo.restaurant_check_sent = True

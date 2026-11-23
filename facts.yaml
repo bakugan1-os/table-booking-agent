@@ -11,4 +11,4 @@ time: "17:00"          # 24h, HH:MM
 date: today            # "today", "tomorrow" or an ISO date (2026-11-23)
 timezone: Europe/London
 
-restaurant_name: null  # unknown on purpose: the agent asks the manager for it
+restaurant_name: null  # unknown on purpose: picked up from what the manager says

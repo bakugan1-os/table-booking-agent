@@ -324,7 +324,10 @@ async def main() -> int:
         convo6,
     )
     await agent._respond()
-    check("confirm blocked without a name", convo6.state == "negotiating")
+    check("confirm blocked without a name", convo6.state != "confirmed")
+    check("and the name is asked for", "confirm the restaurant's name" in client.sent[-1][1])
+    check("as a note-keeping detail", "in my notes" in client.sent[-1][1])
+    check("no recap without a name", "Just to confirm:" not in client.sent[-1][1])
 
     # 9d. "we have a table" is availability, not a booking (the dry run's slip)
     convo6b = Conversation()
@@ -1174,6 +1177,65 @@ async def main() -> int:
     openings = [line for line in lines if '"voice_opening"' in line]
     check("the choice is journalled", bool(openings))
     check("including that it was not possible", any('"possible": false' in line for line in openings))
+
+    # 26. the name is picked up, not asked for up front
+    agent, client, convo41 = build_raw(
+        [
+            decision(reply="Good evening, might you have a table for two at 9pm on Monday?"),
+            # they agree, and never say where we are
+            decision(next_state="confirmed", manager_confirmed=True, reply="Lovely."),
+            # now they answer the question, and confirm again
+            decision(
+                next_state="confirmed",
+                manager_confirmed=True,
+                restaurant_name="The Ivy, Covent Garden",
+                reply="Thank you.",
+            ),
+        ],
+        facts=agreed_facts,
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    opening = client.sent[0][1]
+    check("the opening asks for the table", "table for two" in opening)
+    check("and does not ask which restaurant", "restaurant" not in opening.lower())
+
+    await manager_says_to(agent, "Yes, that's booked for you.")
+    asked = client.sent[-1][1]
+    check("the name is asked for at the end", "confirm the restaurant's name" in asked)
+    check("framed as note-keeping", "in my notes" in asked)
+    check("no recap without a name", convo41.state != "confirmed")
+
+    await manager_says_to(agent, "The Ivy, Covent Garden.")
+    final = client.sent[-1][1]
+    check("the recap follows the answer", "Just to confirm" in final)
+    check("with the name they gave", "The Ivy, Covent Garden" in final)
+    check("and the booking is confirmed", convo41.state == "confirmed")
+
+    # 26b. a name heard over voice is still checked in writing
+    kit9 = FakeVoice(transcript="This is Gaga London, and yes, that's booked.")
+    convo42 = Conversation()
+    convo42.state = "negotiating"
+    agent, client, convo42 = build_raw(
+        [
+            decision(
+                next_state="confirmed",
+                manager_confirmed=True,
+                restaurant_name="Gaga London",
+                reply="Lovely.",
+            )
+        ],
+        convo42,
+        facts=agreed_facts,
+        voice=kit9,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await agent._on_manager(voice_event(900))
+    if agent._debounce:
+        await agent._debounce
+    check("a heard name is still checked", "make sure I have it right" in client.sent[-1][1])
+    check("and no recap yet", convo42.state == "negotiating")
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

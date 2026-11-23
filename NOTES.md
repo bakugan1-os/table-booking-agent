@@ -288,6 +288,16 @@ rest of the conversation. The model has a `reply_channel` field to say what
 it thinks the manager asked for, and that can only force text, never voice.
 Each withheld voice note is journalled as `voice_withheld` with the reason.
 
+**The restaurant's name is picked up, not demanded.** Asking a restaurant
+which restaurant it is, in the first message, reads badly - and the live
+runs showed the manager usually says it unprompted. So the opening is a
+greeting and the request, and the name is taken from whatever they say. If
+it still has not come up when they are ready to confirm, the agent asks
+then, as a note-keeping detail: "Lovely - and just so I have it right in my
+notes, could you confirm the restaurant's name?" That question is in code,
+in writing, and the recap still waits for a name (and for the spelling
+check below, when the name was only heard).
+
 **A name that was only heard is not a name yet.** Whisper is good at
 sentences and poor at proper nouns, and the restaurant's name ends up in
 the confirmation recap. So a name learned from a transcript is held as

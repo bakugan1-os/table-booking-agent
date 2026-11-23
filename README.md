@@ -146,8 +146,11 @@ checks by name.
 
 ## How a conversation goes
 
-1. The agent opens the conversation: it asks for the table and, since it does
-   not know the restaurant's name, asks for that too.
+1. The agent opens the conversation with a greeting and the request itself -
+   party size, day, time. It does not ask which restaurant this is; the name
+   is picked up from whatever the manager says. If it still has not come up
+   when they are ready to confirm, the agent asks then, as a note-keeping
+   detail ("just so I have it right in my notes...").
 2. Incoming messages are debounced for 5 seconds (a burst of three messages
    is one LLM call), with "typing..." showing while it thinks.
 3. States run `greeting -> requesting -> negotiating -> confirmed -> done`.

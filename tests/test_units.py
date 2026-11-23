@@ -770,9 +770,15 @@ check("prompt fixes the agent's side", "on the guest's side" in prompt)
 check("prompt warns off the restaurant's voice", "we look forward to seeing you" in prompt)
 check("prompt documents change_value", '"change_value"' in prompt)
 check("prompt orders the opening", "Say what you want first, ask second" in prompt)
+# the opening is a greeting and the request, nothing else
+check("the opening asks for the table", "party size" in OPEN_CONVERSATION)
+check("and tells the model not to ask the name", "Do not ask" in OPEN_CONVERSATION)
+check("the prompt says where the name comes from", "take it from whatever the manager says" in prompt)
+check("and when to ask for it", "in my notes" in prompt)
 check(
-    "opening instruction asks the name last",
-    OPEN_CONVERSATION.index("party size") < OPEN_CONVERSATION.index("which restaurant"),
+    "the late question is note-keeping, not interrogation",
+    guardrails.ask_restaurant_name_line()
+    == "Lovely - and just so I have it right in my notes, could you confirm the restaurant's name?",
 )
 check("prompt carries a known restaurant", "The Ivy" in build_system_prompt(facts, "negotiating", "The Ivy"))
 
