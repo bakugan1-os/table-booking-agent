@@ -7,7 +7,7 @@ import asyncio
 from telethon import TelegramClient, events
 
 from . import guardrails
-from .config import STATE_FILE, Facts, Settings, greeting_word
+from .config import STATE_FILE, Facts, Settings, greeting_word, human_time
 from .journal import Journal
 from .llm import Brain, Decision
 from .prompts import OPEN_CONVERSATION, build_system_prompt
@@ -162,6 +162,11 @@ class BookingAgent:
             if verdict == "yes":
                 self._apply_approved_change(topic, text)
             else:
+                self.convo.add(
+                    ROLE_OPERATOR,
+                    f"Declined: do not agree to that change of {topic.replace('_', ' ')}. "
+                    "Keep to what is in KNOWN FACTS.",
+                )
                 self.journal.write(
                     "change_declined",
                     topic=topic,
@@ -239,6 +244,15 @@ class BookingAgent:
             return
 
         before, after = self.convo.agree(key, parsed)
+        spoken = human_time(str(after)) if key == "time" else str(after)
+        # Spell the approval out for the model, or it asks for the same
+        # change again on the next turn and the escalations loop.
+        self.convo.add(
+            ROLE_OPERATOR,
+            f"Approved: {key.replace('_', ' ')} is now {spoken}. Do not ask me "
+            "again about it. Tell the manager you are happy with it and ask "
+            f"them to book it under the name {self.convo.agreed['guest_name']}.",
+        )
         self.journal.write(
             "change_approved",
             topic=topic,
@@ -247,6 +261,19 @@ class BookingAgent:
             operator=operator_text,
         )
         print(f"Operator approved a change: {key} {before} -> {after}.")
+
+    def _already_agreed(self, decision: Decision) -> bool:
+        """True when the model is asking to approve what is already agreed."""
+        topic = decision.requested_change
+        if topic not in ("time", "party_size") or not decision.change_value:
+            return False
+        if topic == "time":
+            parsed = guardrails.parse_clock(decision.change_value)
+        else:
+            parsed = guardrails.parse_party_size(decision.change_value)
+        if parsed is None:
+            return False
+        return str(parsed) == str(self.convo.agreed.get(topic))
 
     # --- the turn --------------------------------------------------------
 
@@ -265,14 +292,15 @@ class BookingAgent:
                     self.brain.decide, system_prompt, history
                 )
 
-            last_manager = self.convo.last_manager_text()
+            batch = self.convo.manager_batch()
+            last_manager = "\n".join(batch) or self.convo.last_manager_text()
 
             if decision is None:
                 await self._send(guardrails.holding_line())
                 await self._escalate(
                     "invalid_output",
                     "The model did not return usable output twice in a row.",
-                    last_manager,
+                    batch,
                 )
                 return
 
@@ -299,13 +327,24 @@ class BookingAgent:
             if change == "none" or change in self.convo.resolved_changes:
                 change = ""
 
+            # The model does not always notice that its request was granted.
+            # Asking the operator to approve what is already agreed is how the
+            # live run ended up in an escalation loop.
+            settled = self._already_agreed(decision)
+            if settled:
+                change = ""
+                self.journal.write(
+                    "escalation_skipped",
+                    topic=decision.requested_change,
+                    value=decision.change_value,
+                    reason="already agreed",
+                )
+
             # 1. Off topic, including role-change attempts.
             if decision.off_topic and not secret:
-                await self._send(
-                    guardrails.off_topic_line(booking),
-                    decision=decision,
-                    note="off_topic",
-                )
+                line = guardrails.off_topic_line(booking, self.convo.off_topic_count)
+                self.convo.off_topic_count += 1
+                await self._send(line, decision=decision, note="off_topic")
                 return
 
             # 2. "Are you a bot?" - honest, and the wording comes from the code.
@@ -318,7 +357,7 @@ class BookingAgent:
                 return
 
             # 3. Anything needing the operator's say-so.
-            if decision.needs_operator or change or payment or secret:
+            if (decision.needs_operator and not settled) or change or payment or secret:
                 topic = (
                     "secret"
                     if secret
@@ -327,7 +366,7 @@ class BookingAgent:
                 await self._send(
                     guardrails.holding_line(), decision=decision, note="holding"
                 )
-                await self._escalate(topic, decision.understood, last_manager, decision)
+                await self._escalate(topic, decision.understood, batch, decision)
                 return
 
             # 4. Ordinary turn.
@@ -443,18 +482,33 @@ class BookingAgent:
         self,
         topic: str,
         question: str,
-        last_manager: str,
+        messages: list[str] | str,
         decision: Decision | None = None,
     ) -> None:
         self.convo.question_counter += 1
         tag = f"[Q{self.convo.question_counter}]"
         value = decision.change_value if decision else None
         proposed = f" ({value})" if value else ""
+
+        batch = [messages] if isinstance(messages, str) else list(messages)
+        batch = [line for line in batch if line]
+        if not batch:
+            said = "Manager said: (nothing yet)"
+        elif len(batch) == 1:
+            said = f"Manager said: {batch[0]}"
+        else:
+            # Show the whole burst: the last line alone loses the context.
+            said = "Manager said:\n" + "\n".join(f"- {line}" for line in batch)
+
+        footer = "Reply in this chat and I will carry on."
+        if topic in ("time", "party_size", "deposit", "payment"):
+            footer += " Say yes to approve the change."
+
         body = (
             f"{tag} {question or 'I need your decision before replying.'}\n\n"
-            f"Manager said: {last_manager or '(nothing yet)'}\n"
+            f"{said}\n"
             f"Topic: {topic}{proposed} | state: {self.convo.state}\n\n"
-            "Reply in this chat and I will carry on. Say yes to approve the change."
+            f"{footer}"
         )
         message = await self.client.send_message("me", body)
 

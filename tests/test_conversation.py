@@ -608,6 +608,71 @@ async def main() -> int:
     check("state holds at negotiating", convo18.state == "negotiating")
     check("mismatch escalated", client.sent[-1][0] == "me" and "does not match" in client.sent[-1][1])
 
+    # 19f. after an approval the agent talks to the manager, not to the operator
+    #
+    # The live run looped: the model asked for 9.30pm again, so [Q3] went out
+    # even though the operator had just approved it.
+    convo19 = Conversation()
+    convo19.state = "negotiating"
+    convo19.greeted = True
+    convo19.restaurant_name = "The Ivy, Covent Garden"
+    agent, client, convo19 = build_raw(
+        [
+            decision(
+                next_state="negotiating",
+                requested_change="time",
+                change_value="21:30",
+                needs_operator=True,
+                understood="9pm is fully booked; they offer 9.30pm",
+                reply="I see.",
+            ),
+            # The model asks for the same approval again, as it did live.
+            decision(
+                next_state="negotiating",
+                requested_change="time",
+                change_value="21:30",
+                needs_operator=True,
+                understood="the manager offers 9.30pm",
+                reply="9.30pm suits us nicely - could you book it under the name Test Guest?",
+            ),
+        ],
+        convo19,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await manager_says_to(agent, "I'm afraid we're fully booked at 9pm. We could do 9.30pm instead?")
+    questions_before = convo19.question_counter
+
+    await agent._on_saved(SimpleNamespace(id=95, raw_text="yes"))
+    after = client.sent[-1][1]
+    check("the agent answers the manager", client.sent[-1][0] == "MANAGER")
+    check("no second question to the operator", convo19.question_counter == questions_before)
+    check("not another holding line", "come straight back" not in after)
+    check("it accepts the new time", "9.30pm" in after)
+    check("and asks for the name", "Test Guest" in after)
+    check("the approval is in the history for the model", any(
+        h["role"] == "operator" and h["text"].startswith("Approved: time is now 9.30pm")
+        for h in convo19.history
+    ))
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    check("the skipped escalation is logged", any('"escalation_skipped"' in line for line in lines))
+
+    # 19g. the escalation shows the whole burst, and says nothing about
+    # approving a change when there is nothing to approve
+    convo20 = Conversation()
+    convo20.state = "negotiating"
+    convo20.restaurant_name = "The Ivy"
+    agent, client, convo20 = build_raw([], convo20, facts=agreed_facts)
+    agent.manager, agent.me_id = "MANAGER", 1
+    convo20.add("manager", "Hello?")
+    convo20.add("manager", "Are you still there?")
+    await agent._respond()
+    question = client.sent[-1][1]
+    check("the burst is shown in full", "- Hello?" in question and "- Are you still there?" in question)
+    check("no approval footer on a model failure", "Say yes to approve" not in question)
+    check("the footer is still there", "Reply in this chat" in question)
+
     # 19b. without a clear yes, nothing moves
     convo15 = Conversation()
     convo15.state = "negotiating"

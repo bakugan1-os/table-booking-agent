@@ -146,6 +146,7 @@ class Brain:
     def __init__(self, settings: Settings, journal: Journal) -> None:
         self.model = settings.llm_model
         self.journal = journal
+        self._supports = {"response_format": True, "reasoning_effort": True}
         self._client = OpenAI(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
@@ -154,13 +155,39 @@ class Brain:
         )
 
     def _complete(self, messages: list[dict]) -> str:
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=500,
-        )
-        return response.choices[0].message.content or ""
+        # Reasoning models spend the budget thinking and return an empty
+        # string, so the budget is generous and the thinking kept short.
+        for _ in range(3):
+            extra: dict = {}
+            if self._supports["response_format"]:
+                extra["response_format"] = {"type": "json_object"}
+            if self._supports["reasoning_effort"]:
+                extra["reasoning_effort"] = "low"
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=2000,
+                    **extra,
+                )
+            except Exception as exc:
+                # Not every OpenAI-compatible endpoint takes these; drop
+                # whichever one it complained about and try again.
+                complaint = str(exc).lower()
+                dropped = [
+                    name
+                    for name in ("reasoning_effort", "response_format")
+                    if self._supports[name] and name in complaint
+                ]
+                if not dropped:
+                    raise
+                for name in dropped:
+                    self._supports[name] = False
+                self.journal.write("llm_param_dropped", params=dropped)
+                continue
+            return response.choices[0].message.content or ""
+        return ""
 
     def decide(self, system_prompt: str, history: list[dict]) -> Decision | None:
         """Returns None when the model fails twice; the caller then escalates."""

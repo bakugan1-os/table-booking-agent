@@ -33,6 +33,7 @@ class Conversation:
     pending_topic: str | None = None
     pending_change_value: str | None = None
     clarifications: int = 0
+    off_topic_count: int = 0
     resolved_changes: list[str] = field(default_factory=list)
     question_counter: int = 0
     agent_saved_ids: list[int] = field(default_factory=list)
@@ -87,6 +88,16 @@ class Conversation:
 
     def add(self, role: str, text: str) -> None:
         self.history.append({"role": role, "text": text, "ts": _now_iso()})
+
+    def manager_batch(self) -> list[str]:
+        """Everything the manager has said since our last message."""
+        batch: list[str] = []
+        for item in reversed(self.history):
+            if item["role"] == ROLE_AGENT:
+                break
+            if item["role"] == ROLE_MANAGER:
+                batch.append(item["text"])
+        return list(reversed(batch))
 
     def last_manager_text(self) -> str:
         for item in reversed(self.history):

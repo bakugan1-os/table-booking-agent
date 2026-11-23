@@ -104,6 +104,25 @@ clarifying question back to Saved Messages ("Sorry, is that a yes to
 9.30pm?") and keeps waiting rather than calling the model, with a cap of two
 clarifications before it simply waits quietly.
 
+**An approval is told to the model, not just to the state.** The fifth dry
+run looped: the operator approved 9.30pm, the booking moved, and the model -
+which had no idea - asked for the same approval again, so `[Q3]` went out.
+Now an approved change appends an operator line to the history ("Approved:
+time is now 9.30pm. Do not ask me again about it. Tell the manager you are
+happy with it...") and a decline appends its own. On top of that,
+`_already_agreed()` drops `needs_operator` when the model's own
+`requested_change`/`change_value` already matches the agreed booking, and
+logs `escalation_skipped`. Belt and braces, because the prompt alone had
+already failed once.
+
+**Reasoning models need room.** The same run produced two empty completions
+in a row from gpt-oss on Groq: 500 tokens were spent thinking, nothing was
+left to answer with, and a question about the date became an escalation. The
+request now carries `max_tokens=2000`, `reasoning_effort="low"` and
+`response_format={"type": "json_object"}`, and each of the last two is
+dropped and retried if the endpoint complains about it, so DeepSeek or
+anything else still works.
+
 **The model can no longer get ahead of the agreed booking.**
 `conflicting_values()` compares the clock times and party sizes in a piece of
 text against the agreed booking, and runs on both sides: on the agent's own

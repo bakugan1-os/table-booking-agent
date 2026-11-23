@@ -187,6 +187,15 @@ print("recap:", recap)
 # markers of an actual booking: logged as a disagreement, never acted on
 check("marker: reserved", guardrails.confirmation_markers("that's reserved under your name") == ["reserved"])
 check("marker: booked", "booked" in guardrails.confirmation_markers("All booked!"))
+# "fully booked" is the opposite of a booking
+check("not a marker: fully booked", guardrails.confirmation_markers("9pm is fully booked") == [])
+check("not a marker: booked up", guardrails.confirmation_markers("we are booked up") == [])
+check("not a marker: not booked", guardrails.confirmation_markers("it is not booked yet") == [])
+check(
+    "fully booked plus a real one still counts",
+    guardrails.confirmation_markers("9pm is fully booked, but 9.30pm is reserved for you")
+    == ["reserved"],
+)
 check("marker: see you then", "see you then" in guardrails.confirmation_markers("Lovely, see you then."))
 check("marker: confirmed", "confirmed" in guardrails.confirmation_markers("You are confirmed."))
 check("no marker on availability", guardrails.confirmation_markers("Yes, we have a table for two at 9pm.") == [])
@@ -289,6 +298,16 @@ check("bot question", guardrails.asks_if_bot("are you a bot?"))
 check("bot question 2", guardrails.asks_if_bot("am i talking to a human"))
 check("not a bot question", not guardrails.asks_if_bot("is the table by the window"))
 check("off-topic line mentions time", "5pm" in guardrails.off_topic_line(facts))
+check(
+    "off-topic refusals vary",
+    len({guardrails.off_topic_line(facts, n) for n in range(3)}) == 3,
+)
+check("off-topic refusals cycle", guardrails.off_topic_line(facts, 3) == guardrails.off_topic_line(facts, 0))
+check(
+    "every refusal names the time",
+    all("5pm" in guardrails.off_topic_line(facts, n) for n in range(3)),
+)
+check("'may we settle' is gone", "may we settle" not in guardrails.bot_disclosure_line(facts).lower())
 check("disclosure is honest", "AI assistant" in guardrails.bot_disclosure_line(facts))
 
 # none of the fixed lines may speak as though we worked at the restaurant
@@ -472,6 +491,63 @@ d4, _ = _validate(_extract_json('{"reply": "", "next_state": "done"}'))
 check("empty reply rejected", d4 is None)
 d5, _ = _validate(_extract_json('{"reply": "hi", "next_state": "done", "requested_change": "pony"}'))
 check("unknown change -> none", d5 is not None and d5.requested_change == "none")
+
+# --- 7b. the request the model actually receives ----------------------------
+#
+# gpt-oss on Groq spent its 500 tokens reasoning and returned "" twice,
+# which turned a question about the date into an escalation.
+
+from types import SimpleNamespace  # noqa: E402
+
+from agent.config import Settings  # noqa: E402
+from agent.journal import Journal  # noqa: E402
+from agent.llm import Brain  # noqa: E402
+
+
+class FakeCompletions:
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        outcome = self.script.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=outcome))]
+        )
+
+
+def make_brain(script):
+    brain = Brain(
+        Settings(
+            api_id=1, api_hash="h", manager_username="m",
+            llm_base_url="http://example.invalid", llm_api_key="k", llm_model="model",
+        ),
+        Journal(TMP / "logs" / "units.jsonl"),
+    )
+    fake = FakeCompletions(script)
+    brain._client = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    return brain, fake
+
+
+REPLY = '{"reply": "hello", "next_state": "requesting"}'
+brain, fake = make_brain([REPLY])
+check("a decision comes back", brain.decide("system", []) is not None)
+sent = fake.calls[0]
+check("json mode asked for", sent.get("response_format") == {"type": "json_object"})
+check("thinking kept short", sent.get("reasoning_effort") == "low")
+check("room to answer", sent.get("max_tokens") == 2000)
+
+brain, fake = make_brain([TypeError("unsupported parameter: reasoning_effort"), REPLY])
+check("unsupported param survived", brain.decide("system", []) is not None)
+check("it was dropped", brain._supports["reasoning_effort"] is False)
+check("json mode kept", brain._supports["response_format"] is True)
+check("and the retry carried it", "reasoning_effort" not in fake.calls[1])
+
+brain, fake = make_brain([RuntimeError("quota exceeded")])
+check("a real error is not swallowed", brain.decide("system", []) is None)
 
 # --- 8. the prompt ----------------------------------------------------------
 

@@ -169,18 +169,26 @@ def holding_line() -> str:
     return "Let me check that with the guest and I will come straight back to you."
 
 
-def off_topic_line(facts: Facts) -> str:
-    return (
-        "I'm afraid I can only help with the reservation - shall we confirm the table "
-        f"for {facts.time_human}?"
-    )
+_OFF_TOPIC = (
+    "I'm afraid I can only help with the reservation - shall we confirm the table "
+    "for {time}?",
+    "That's rather outside my remit, I'm afraid. Could we settle the table for "
+    "{time} first?",
+    "I'd better stick to the booking, if you don't mind - are we all right for "
+    "{time}?",
+)
+
+
+def off_topic_line(facts: Facts, seen: int = 0) -> str:
+    """Three ways of saying no, so a persistent manager is not met with a parrot."""
+    return _OFF_TOPIC[seen % len(_OFF_TOPIC)].format(time=facts.time_human)
 
 
 def bot_disclosure_line(facts: Facts) -> str:
     return (
         f"To be straight with you, I'm an AI assistant arranging this on behalf of "
-        f"{facts.guest_name}. Happy to carry on either way - may we settle the table "
-        f"for {facts.time_human}?"
+        f"{facts.guest_name}. Happy to carry on either way - are we all right for "
+        f"{facts.time_human}?"
     )
 
 
@@ -336,7 +344,9 @@ def parse_party_size(value: str) -> int | None:
 # Markers that a booking was actually made, used only to flag a disagreement
 # with the model - never to overrule it.
 _CONFIRMATION = re.compile(
-    r"\b(reserved|booked|booking is (?:made|confirmed)|confirmed|that's done"
+    # "fully booked" and "booked up" mean the opposite of a booking.
+    r"\b(reserved|(?<!fully )(?<!not )(?<!no )booked(?! up)"
+    r"|booking is (?:made|confirmed)|confirmed|that's done"
     r"|that is done|all set|see you then|see you (?:at|on))\b",
     re.IGNORECASE,
 )
