@@ -81,6 +81,16 @@ def human_time(hhmm: str) -> str:
     return f"{hour12}{suffix}" if minute == 0 else f"{hour12}.{minute:02d}{suffix}"
 
 
+def greeting_word(tz: ZoneInfo, now: datetime | None = None) -> str:
+    """morning before noon, afternoon before 6pm, evening after that."""
+    now = now or datetime.now(tz)
+    if now.hour < 12:
+        return "morning"
+    if now.hour < 18:
+        return "afternoon"
+    return "evening"
+
+
 _NUMBER_WORDS = {
     1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
     6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",

@@ -62,17 +62,20 @@ class Conversation:
 
     # --- state machine ---------------------------------------------------
 
-    def next_state(self, proposed: str, *, restaurant_known: bool) -> str:
+    def next_state(
+        self, proposed: str, *, restaurant_known: bool, manager_confirmed: bool = False
+    ) -> str:
         """Validate the LLM's proposal: forward or stay, never backwards.
 
-        'confirmed' additionally requires the restaurant's name, and 'done'
-        is only reachable from 'confirmed'.
+        'confirmed' needs the restaurant's name AND the manager actually
+        saying the booking is made - a free table is not a booking. 'done' is
+        only reachable from 'confirmed'.
         """
         if proposed not in _ORDER:
             return self.state
         if _ORDER[proposed] <= _ORDER[self.state]:
             return self.state
-        if proposed == "confirmed" and not restaurant_known:
+        if proposed == "confirmed" and not (restaurant_known and manager_confirmed):
             return "negotiating" if _ORDER[self.state] < _ORDER["negotiating"] else self.state
         if proposed == "done" and self.state != "confirmed":
             return self.state

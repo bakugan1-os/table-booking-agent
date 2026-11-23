@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import conversation as conv_mod  # noqa: E402
-from agent.config import load_facts  # noqa: E402
+from agent.config import greeting_word, load_facts  # noqa: E402
 from agent.conversation import BookingAgent  # noqa: E402
 from agent.journal import Journal  # noqa: E402
 from agent.llm import Decision  # noqa: E402
@@ -97,6 +97,7 @@ def decision(**kw) -> Decision:
         off_topic=False,
         requested_change="none",
         asked_if_bot=False,
+        manager_confirmed=False,
         restaurant_name=None,
     )
     base.update(kw)
@@ -241,8 +242,10 @@ async def main() -> int:
     convo5 = Conversation()
     convo5.state = "negotiating"
     convo5.restaurant_name = "The Ivy"
-    convo5.add("manager", "Yes, 5pm for two is fine.")
-    agent, client, convo5 = build([decision(next_state="confirmed", reply="great")], convo5)
+    convo5.add("manager", "All booked, see you then.")
+    agent, client, convo5 = build(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="great")], convo5
+    )
     await agent._respond()
     body = client.sent[0][1]
     check("recap has party size", "two people" in body)
@@ -254,10 +257,42 @@ async def main() -> int:
     # 9b. confirmed is refused while the restaurant is unknown
     convo6 = Conversation()
     convo6.state = "requesting"
-    convo6.add("manager", "Yes that works.")
-    agent, client, convo6 = build([decision(next_state="confirmed", reply="Lovely, thank you.")], convo6)
+    convo6.add("manager", "Yes that works, it's booked.")
+    agent, client, convo6 = build(
+        [decision(next_state="confirmed", manager_confirmed=True, reply="Lovely, thank you.")],
+        convo6,
+    )
     await agent._respond()
     check("confirm blocked without a name", convo6.state == "negotiating")
+
+    # 9d. "we have a table" is availability, not a booking (the dry run's slip)
+    convo6b = Conversation()
+    convo6b.state = "negotiating"
+    convo6b.restaurant_name = "The Ivy, Covent Garden"
+    convo6b.add("manager", "Yes, we have a table for two at 9pm.")
+    agent, client, convo6b = build(
+        [
+            decision(
+                next_state="confirmed",
+                manager_confirmed=False,
+                reply="Wonderful - could you put it in the name of Oliver Hart?",
+            )
+        ],
+        convo6b,
+    )
+    await agent._respond()
+    check("availability keeps us negotiating", convo6b.state == "negotiating")
+    check("no recap sent yet", "Just to confirm" not in client.sent[0][1])
+    check("agent asks for the booking", "Oliver Hart" in client.sent[0][1])
+
+    # ... and the recap follows once the manager actually books it
+    convo6b.add("manager", "Done, that's reserved for you.")
+    agent.brain.queue.append(
+        decision(next_state="confirmed", manager_confirmed=True, reply="Thank you kindly.")
+    )
+    await agent._respond()
+    check("booking confirmed on the second turn", convo6b.state == "confirmed")
+    check("recap sent", "Just to confirm" in client.sent[-1][1])
 
     # 9c. the restaurant's name is learned from the model's field
     convo7 = Conversation()
@@ -318,6 +353,18 @@ async def main() -> int:
     check("greeted recorded", convo10.greeted)
     check("state after greeting", convo10.state == "requesting")
     check("watchdog kept alive", agent._watchdog_task is not None)
+
+    # 15a. the salutation follows London's clock, whatever the model wrote
+    expected = f"Good {greeting_word(FACTS.tz)}"
+    agent, client, _ = build_raw(
+        [decision(reply="Good morning, might you have a table at 21:00 this evening?")]
+    )
+    await agent.run()
+    if agent._watchdog_task:
+        agent._watchdog_task.cancel()
+    opening = client.sent[0][1]
+    check(f"salutation matches London ({expected})", opening.startswith(expected))
+    check("24h time normalised on the wire", "21:00" not in opening and "9pm" in opening)
 
     # 15b. a resumed conversation does not greet again
     convo11 = Conversation()

@@ -22,6 +22,7 @@ from agent import guardrails  # noqa: E402
 from agent.config import (  # noqa: E402
     ConfigError,
     Facts,
+    greeting_word,
     load_facts,
     start_guard,
 )
@@ -156,6 +157,65 @@ check("recap survives unknown name", "at " in guardrails.recap_line(facts, None)
 check("recap <= 3 sentences", guardrails.recap_line(facts, "The Ivy").count(". ") <= 2)
 print("recap:", guardrails.recap_line(facts, "The Ivy"))
 
+# the salutation follows London's clock, not the model's mood
+LONDON = ZoneInfo("Europe/London")
+
+
+def at(hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 11, 23, hour, minute, tzinfo=LONDON)
+
+
+check("00:00 is morning", greeting_word(LONDON, at(0)) == "morning")
+check("11:59 is morning", greeting_word(LONDON, at(11, 59)) == "morning")
+check("12:00 is afternoon", greeting_word(LONDON, at(12)) == "afternoon")
+check("17:59 is afternoon", greeting_word(LONDON, at(17, 59)) == "afternoon")
+check("18:00 is evening", greeting_word(LONDON, at(18)) == "evening")
+check("23:59 is evening", greeting_word(LONDON, at(23, 59)) == "evening")
+check("greeting defaults to now", greeting_word(LONDON) in ("morning", "afternoon", "evening"))
+
+check(
+    "wrong salutation corrected",
+    guardrails.sanitize("Good morning, might you have a table?", allow_phone=False, greeting="evening")
+    .startswith("Good evening,"),
+)
+check(
+    "right salutation left alone",
+    guardrails.sanitize("Good evening, might you have a table?", allow_phone=False, greeting="evening")
+    .startswith("Good evening,"),
+)
+check(
+    "no salutation, nothing invented",
+    not guardrails.sanitize("Might you have a table?", allow_phone=False, greeting="evening").startswith("Good"),
+)
+check(
+    "salutation only at the start",
+    "good afternoon" in guardrails.sanitize(
+        "Lovely. I said good afternoon earlier.", allow_phone=False, greeting="evening"
+    ),
+)
+
+# one house style for clock times
+check("24h becomes British", guardrails.normalise_times("at 21:00 please") == "at 9pm please")
+check("24h with minutes", guardrails.normalise_times("at 21:30") == "at 9.30pm")
+check("morning 24h", guardrails.normalise_times("at 09:00") == "at 9am")
+check("spaced am/pm closed up", guardrails.normalise_times("at 9 pm") == "at 9pm")
+check("uppercase am/pm", guardrails.normalise_times("at 9 PM") == "at 9pm")
+# "a.m." keeps its final dot on purpose: swallowing it would merge sentences.
+check("dotted a.m.", guardrails.normalise_times("at 11 a.m.") == "at 11am.")
+check("9:00 pm is not 9am", guardrails.normalise_times("at 9:00 pm") == "at 9pm")
+check("half past kept", guardrails.normalise_times("at 7:30pm") == "at 7.30pm")
+check("midnight", guardrails.normalise_times("at 00:30") == "at 12.30am")
+check("dates untouched", guardrails.normalise_times("on Monday 23 November") == "on Monday 23 November")
+check("party size untouched", guardrails.normalise_times("a table for 2") == "a table for 2")
+check(
+    "sanitize normalises the wire",
+    "9pm" in guardrails.sanitize("Could you confirm a table at 21:00?", allow_phone=False),
+)
+check(
+    "no 24h time survives",
+    "21:00" not in guardrails.sanitize("Could you confirm a table at 21:00?", allow_phone=False),
+)
+
 check("payment: deposit", guardrails.mentions_payment("we need a 10 pound deposit"))
 check("payment: prepay", guardrails.mentions_payment("could you pre-pay please"))
 check("payment: card", guardrails.mentions_payment("we hold a card"))
@@ -176,8 +236,22 @@ c = Conversation()
 check("greeting -> requesting", c.next_state("requesting", restaurant_known=False) == "requesting")
 c.state = "requesting"
 check("no backwards", c.next_state("greeting", restaurant_known=True) == "requesting")
-check("confirmed blocked without name", c.next_state("confirmed", restaurant_known=False) == "negotiating")
-check("confirmed allowed with name", c.next_state("confirmed", restaurant_known=True) == "confirmed")
+check(
+    "confirmed blocked without a name",
+    c.next_state("confirmed", restaurant_known=False, manager_confirmed=True) == "negotiating",
+)
+check(
+    "a free table is not a booking",
+    c.next_state("confirmed", restaurant_known=True, manager_confirmed=False) == "negotiating",
+)
+check(
+    "confirmed needs both",
+    c.next_state("confirmed", restaurant_known=True, manager_confirmed=True) == "confirmed",
+)
+check(
+    "manager_confirmed defaults to false",
+    c.next_state("confirmed", restaurant_known=True) == "negotiating",
+)
 check("done blocked outside confirmed", c.next_state("done", restaurant_known=True) == "requesting")
 c.state = "confirmed"
 check("done allowed from confirmed", c.next_state("done", restaurant_known=True) == "done")
@@ -216,6 +290,11 @@ good = """Sure! Here you go:
 ```"""
 d, problem = _validate(_extract_json(good))
 check("json parsed from fenced chatter", d is not None)
+check("manager_confirmed defaults false", d is not None and d.manager_confirmed is False)
+d_ok, _ = _validate(
+    _extract_json('{"reply": "hi", "next_state": "confirmed", "manager_confirmed": true}')
+)
+check("manager_confirmed parsed", d_ok is not None and d_ok.manager_confirmed is True)
 check("bool coerced from string", d is not None and d.needs_operator is True)
 check("'null' name -> None", d is not None and d.restaurant_name is None)
 check("change kept", d is not None and d.requested_change == "deposit")
@@ -235,6 +314,17 @@ check("prompt has facts", "Oliver Hart" in prompt and "5pm" in prompt)
 check("prompt marks unknown restaurant", "UNKNOWN" in prompt)
 check("prompt has state", "CURRENT STATE: negotiating" in prompt)
 check("prompt has contract", '"requested_change"' in prompt)
+check("prompt has manager_confirmed", '"manager_confirmed"' in prompt)
+check("prompt bans parroting", "quote the manager's words" in prompt)
+check(
+    "prompt carries the evening greeting",
+    'greet with "Good evening"' in build_system_prompt(facts, "greeting", None, "evening"),
+)
+check(
+    "prompt carries the morning greeting",
+    'greet with "Good morning"' in build_system_prompt(facts, "greeting", None, "morning"),
+)
+check("prompt bans 24h times", "Never 21:00" in prompt)
 check("prompt carries a known restaurant", "The Ivy" in build_system_prompt(facts, "negotiating", "The Ivy"))
 
 # --- 9. every Telethon coroutine call is awaited ----------------------------

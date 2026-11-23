@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from .config import Facts
+from .config import Facts, human_time
 
 MAX_SENTENCES = 3
 MAX_CHARS = 300
@@ -66,11 +66,48 @@ def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
 
 
-def sanitize(reply: str, *, allow_phone: bool) -> str:
-    """Strip links, markup and emoji; drop numbers we were not asked for; cap length."""
+# "9 pm", "9:30PM", "9.30 p.m." - matched before the 24h form, or "9:00 pm"
+# would be read as nine in the morning.
+_AMPM = re.compile(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?\s*m\.?\b", re.IGNORECASE)
+# "21:00", "09:30"
+_24H = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+
+_SALUTATION = re.compile(r"^(\s*)good\s+(morning|afternoon|evening|day)\b", re.IGNORECASE)
+
+
+def _british(hour: int, minute: int) -> str:
+    return human_time(f"{hour % 24:02d}:{minute:02d}")
+
+
+def normalise_times(text: str) -> str:
+    """One house style for clock times: 9pm, 5pm, 9.30pm - never 21:00."""
+
+    def from_ampm(match: re.Match) -> str:
+        hour = int(match.group(1)) % 12
+        minute = int(match.group(2) or 0)
+        if match.group(3).lower() == "p":
+            hour += 12
+        return _british(hour, minute)
+
+    def from_24h(match: re.Match) -> str:
+        return _british(int(match.group(1)), int(match.group(2)))
+
+    return _24H.sub(from_24h, _AMPM.sub(from_ampm, text))
+
+
+def fix_salutation(text: str, word: str) -> str:
+    """'Good morning' sent at 9pm is the kind of slip a guest would notice."""
+    return _SALUTATION.sub(lambda m: f"{m.group(1)}Good {word}", text, count=1)
+
+
+def sanitize(reply: str, *, allow_phone: bool, greeting: str | None = None) -> str:
+    """Strip links, markup and emoji; fix the time and the salutation; cap length."""
     text = _URL.sub("", reply or "")
     text = _EMOJI.sub("", text)
     text = _MARKDOWN.sub("", text)
+    text = normalise_times(text)
+    if greeting:
+        text = fix_salutation(text, greeting)
     text = re.sub(r"\s+", " ", text).strip()
 
     parts = _sentences(text)

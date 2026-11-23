@@ -113,8 +113,9 @@ checks by name.
 2. Incoming messages are debounced for 5 seconds (a burst of three messages
    is one LLM call), with "typing..." showing while it thinks.
 3. States run `greeting -> requesting -> negotiating -> confirmed -> done`.
-   Entering `confirmed` sends a recap built in code: party size, time, date,
-   restaurant, name.
+   `confirmed` needs the manager to say the booking is *made* - a free table
+   is not a booking - and entering it sends a recap built in code: party size,
+   time, date, restaurant, name.
 4. In `done` the agent still answers the manager, briefly and politely.
 5. After 10 minutes of silence it sends **one** polite nudge, never more.
 
@@ -146,6 +147,8 @@ Enforced in code, not just asked for in the prompt:
   polite refusal and a nudge back to the booking
 - replies capped at 3 sentences / 300 characters, with markdown, emoji and
   links stripped
+- clock times rewritten to one British form (`21:00` becomes `9pm`) and the
+  salutation set from London's clock, not from the model
 - the phone number is removed from replies unless the manager asked for a
   contact number; card details, passwords and codes are never given - they
   go to you

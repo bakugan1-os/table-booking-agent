@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .config import Facts
+from .config import Facts, greeting_word
 
 JSON_CONTRACT = """\
 Reply with ONE JSON object and nothing else - no prose, no code fences:
@@ -15,6 +15,7 @@ Reply with ONE JSON object and nothing else - no prose, no code fences:
   "off_topic": true or false,
   "requested_change": "time|party_size|deposit|payment|none",
   "asked_if_bot": true or false,
+  "manager_confirmed": true or false,
   "restaurant_name": "the restaurant's name if the manager has told you, else null"
 }
 
@@ -25,6 +26,11 @@ Field notes:
   a deposit or any other payment.
 - asked_if_bot: true if they ask whether you are a bot, an AI or a human.
   Do not answer that question in "reply"; the code sends a fixed honest answer.
+- manager_confirmed: true ONLY when the manager says the booking itself is
+  made - "that's booked", "you're confirmed", "I've reserved it", "see you
+  then". A table merely being available is NOT a booking: "we have a table",
+  "that time is fine", "yes, we can do 5pm" all mean manager_confirmed false.
+  When in doubt it is false.
 - off_topic: true if their message is not about this reservation.
 - Still fill "reply" even when needs_operator, off_topic or asked_if_bot is
   true; the code may replace it with a fixed line.
@@ -35,7 +41,9 @@ def build_system_prompt(
     facts: Facts,
     state: str,
     restaurant_name: str | None,
+    greeting: str | None = None,
 ) -> str:
+    greeting = greeting or greeting_word(facts.tz)
     restaurant = (
         f"{restaurant_name} (the manager told you this)"
         if restaurant_name
@@ -51,7 +59,14 @@ HOW YOU WRITE
 - British English, polite, warm, with good manners; brief and human.
 - At most 3 sentences per message. Plain text only: no markdown, no emoji,
   no bullet points, no headings.
-- Do not repeat earlier messages word for word, and do not over-apologise.
+- Never quote the manager's words back at them. "Thank you for confirming,
+  The Ivy, Covent Garden" reads like a form letter; "Thank you, that's
+  lovely" reads like a person. Acknowledge briefly and move the booking on.
+- Do not repeat your own earlier messages word for word, and do not
+  over-apologise.
+- Write clock times the British way: {facts.time_human}, 9pm, 7.30pm.
+  Never 21:00, never "9 pm", never "9 PM".
+- It is now {greeting} in London, so greet with "Good {greeting}".
 
 KNOWN FACTS - the only facts you may state
 - Guest name: {facts.guest_name}
@@ -71,8 +86,11 @@ The states run greeting -> requesting -> negotiating -> confirmed -> done.
 - greeting: open the conversation.
 - requesting: ask for the table, giving party size, date and time; ask the
   restaurant's name if it is still unknown.
-- negotiating: answer the manager's questions and work towards a yes.
-- confirmed: the manager has agreed. The code sends the confirmation recap.
+- negotiating: answer the manager's questions and work towards a booking. If
+  they say a table is free, that is not yet a booking: ask them to put it in
+  the guest's name and wait for them to say it is done.
+- confirmed: the manager has said the booking is made. The code sends the
+  confirmation recap, so keep your own reply short.
 - done: everything is arranged. If the manager writes, answer briefly and
   courteously, and do not reopen settled matters.
 

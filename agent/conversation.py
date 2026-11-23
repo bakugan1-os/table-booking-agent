@@ -7,7 +7,7 @@ import asyncio
 from telethon import TelegramClient, events
 
 from . import guardrails
-from .config import STATE_FILE, Facts, Settings
+from .config import STATE_FILE, Facts, Settings, greeting_word
 from .journal import Journal
 from .llm import Brain, Decision
 from .prompts import OPEN_CONVERSATION, build_system_prompt
@@ -163,8 +163,10 @@ class BookingAgent:
 
     async def _respond(self) -> None:
         async with self._lock:
+            # Worked out here, not by the model: London's clock decides this.
+            greeting = greeting_word(self.facts.tz)
             system_prompt = build_system_prompt(
-                self.facts, self.convo.state, self.convo.restaurant_name
+                self.facts, self.convo.state, self.convo.restaurant_name, greeting
             )
             history = list(self.convo.history)
 
@@ -228,13 +230,17 @@ class BookingAgent:
 
             # 4. Ordinary turn.
             new_state = self.convo.next_state(
-                decision.next_state, restaurant_known=bool(self.convo.restaurant_name)
+                decision.next_state,
+                restaurant_known=bool(self.convo.restaurant_name),
+                manager_confirmed=decision.manager_confirmed,
             )
             if new_state == "confirmed" and self.convo.state != "confirmed":
                 reply = guardrails.recap_line(self.facts, self.convo.restaurant_name)
             else:
                 reply = guardrails.sanitize(
-                    decision.reply, allow_phone=self.convo.phone_requested
+                    decision.reply,
+                    allow_phone=self.convo.phone_requested,
+                    greeting=greeting,
                 )
 
             if not reply:

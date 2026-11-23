@@ -64,9 +64,20 @@ different deposit demand would not escalate on keywords alone - it still has
 to come through `needs_operator` or `requested_change`.
 
 **State transitions are validated in code.** Forward or stay, never
-backwards. `confirmed` additionally needs the restaurant's name;
-`done` is reachable only from `confirmed`. A model that jumps the gun lands
-in `negotiating` instead.
+backwards. `confirmed` needs two things: the restaurant's name and
+`manager_confirmed`, the model's reading of whether the manager said the
+booking is actually made. A table being free ("we have a table for two at
+9pm") is availability, not a booking, so the agent asks for it to be put in
+the guest's name and stays in `negotiating`; the first dry run confirmed on
+availability alone. `done` is reachable only from `confirmed`. A model that
+jumps the gun lands in `negotiating` instead.
+
+**House style is enforced after the model, not asked for before it.** The
+salutation comes from London's clock (`greeting_word`: morning before noon,
+afternoon before 6pm, evening after), and `sanitize` rewrites a wrong "Good
+morning" rather than trusting the prompt. Clock times are rewritten to one
+British form - `21:00`, `9 pm` and `9:00 PM` all become `9pm` - because the
+first dry run mixed `9pm` and `21:00` in the same conversation.
 
 **Time guard.** `main.py` exits with a warning if the booking is less than an
 hour away in `facts.yaml`'s timezone. `date: today` is resolved once at
