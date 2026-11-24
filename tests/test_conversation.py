@@ -1124,7 +1124,11 @@ async def main() -> int:
         agent._watchdog_task.cancel()
     check("the opening is spoken", len(client.files) == 1 and client.sent == [])
     check("it is a voice note", client.files[0][2].get("voice_note") is True)
-    check("with the words as a caption", client.files[0][2].get("caption", "").startswith("Good evening"))
+    # the salutation follows London's clock, so compare against what was said
+    check(
+        "with the words as a caption",
+        client.files[0][2].get("caption", "").endswith("table for two at 9pm?"),
+    )
     check("and the caption matches what was said", client.files[0][2]["caption"] == opener.spoken[0])
     check("the state still moved on", convo38.state == "requesting")
 
@@ -1321,6 +1325,110 @@ async def main() -> int:
     check("a refusal leaves the time alone", convo44.agreed["time"] == "17:00")
     check("and the booking stays confirmed", convo44.state == "confirmed")
     check("with its outcome", convo44.outcome == "booked")
+
+    # 28. the restaurant lets the table go after confirming it
+    convo45 = Conversation()
+    convo45.state = "confirmed"
+    convo45.outcome = "booked"
+    convo45.restaurant_name = "The Ivy"
+    convo45.greeted = True
+    convo45.add("manager", "Yes, that's booked for you.")
+    agent, client, convo45 = build_raw(
+        [
+            decision(reply="I see."),
+            decision(reply="That's a shame - is there anything else you can do?"),
+            decision(next_state="confirmed", manager_confirmed=True, reply="Thank you."),
+        ],
+        convo45,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+
+    await manager_says_to(agent, "I'm sorry, the client cancelled - your table was given away.")
+    check("the booking is reopened", convo45.state == "negotiating")
+    check("the outcome is cleared", convo45.outcome is None)
+    check("the manager gets a holding line", "come straight back" in client.sent[0][1])
+    check("and the operator is told", client.sent[-1][0] == "me")
+    check("with the words that gave it away", "given away" in client.sent[-1][1])
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    check(
+        "released is the reason in the journal",
+        any('"released by restaurant"' in line for line in lines),
+    )
+
+    # the operator says no, and then the restaurant reinstates it
+    await agent._on_saved(SimpleNamespace(id=960, raw_text="ні"))
+    await manager_says_to(agent, "Good news - it's reinstated, you're booked for 9pm.")
+    final = client.sent[-1][1]
+    check("a full recap follows", "Just to confirm" in final)
+    check("recap: party size", "a table for two" in final)
+    check("recap: time", "9pm" in final)
+    check("recap: date", agreed_facts.date_human in final)
+    check("recap: restaurant", "The Ivy" in final)
+    check("recap: guest name", "Test Guest" in final)
+    check("confirmed again", convo45.state == "confirmed")
+    check("and booked again", convo45.outcome == "booked")
+
+    # 29. quoting: their words or nothing
+    convo46 = Conversation()
+    convo46.state = "confirmed"
+    convo46.restaurant_name = "The Ivy"
+    convo46.add("manager", "Yes, the table is booked for you at 9pm.")
+    convo46.add("agent", "Wonderful, thank you.")
+    agent, client, convo46 = build_raw(
+        [decision(reply="Certainly.")], convo46, facts=agreed_facts
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "What did I say exactly? Quote my message.")
+    answer = client.sent[-1][1]
+    check("the quote is their own words", '"Yes, the table is booked for you at 9pm."' in answer)
+    check("with a time", "at " in answer and "you wrote" in answer)
+    check("and it is written, not spoken", client.files == [])
+
+    # 29b. an invented quote never reaches the manager
+    convo47 = Conversation()
+    convo47.state = "negotiating"
+    convo47.restaurant_name = "The Ivy"
+    convo47.add("manager", "We have a table at 9pm.")
+    agent, client, convo47 = build_raw(
+        [
+            decision(
+                reply='Thank you. You said "I guarantee the table is yours for the evening". '
+                "Shall we settle it?"
+            )
+        ],
+        convo47,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "Anything else?")
+    sent_text = client.sent[-1][1]
+    check("the invented quote is gone", "guarantee the table is yours" not in sent_text)
+    check("the rest of the message survives", "Shall we settle it?" in sent_text)
+    lines = (TMP / "logs" / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
+    check("and it is journalled", any('"quote_dropped"' in line for line in lines))
+
+    # 30. once the table is booked, nothing is "to be confirmed" any more
+    convo48 = Conversation()
+    convo48.state = "confirmed"
+    convo48.restaurant_name = "The Ivy"
+    agent, client, convo48 = build_raw(
+        [
+            decision(off_topic=True, reply="whatever"),
+            decision(asked_if_bot=True, reply="whatever"),
+        ],
+        convo48,
+        facts=agreed_facts,
+    )
+    agent.manager, agent.me_id = "MANAGER", 1
+    await manager_says_to(agent, "What do you think of the football?")
+    off_topic = client.sent[-1][1]
+    check("the off-topic line says it is settled", "all set" in off_topic)
+    check("and does not ask to confirm again", "shall we confirm" not in off_topic.lower())
+    await manager_says_to(agent, "Are you a bot?")
+    disclosure = client.sent[-1][1]
+    check("the disclosure says it is settled", "all set" in disclosure)
+    check("and still owns up", "AI assistant" in disclosure)
 
     # 17. login.py's sign-in path, with Telegram stubbed out
     import login as login_module  # noqa: PLC0415

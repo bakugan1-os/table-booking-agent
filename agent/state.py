@@ -115,6 +115,9 @@ class Conversation:
                 batch.append(item["text"])
         return list(reversed(batch))
 
+    def manager_turns(self) -> list[dict]:
+        return [item for item in self.history if item["role"] == ROLE_MANAGER]
+
     def last_manager_text(self) -> str:
         for item in reversed(self.history):
             if item["role"] == ROLE_MANAGER:

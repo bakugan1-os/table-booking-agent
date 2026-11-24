@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from telethon import TelegramClient, events
 from telethon.tl.types import DocumentAttributeAudio
@@ -220,7 +221,9 @@ class BookingAgent:
             return
 
         topic = self.convo.pending_topic
-        if topic and topic not in ("other", "secret", "invalid_output"):
+        # "released" is news, not a change to approve: anything the operator
+        # says simply lets the agent carry on.
+        if topic and topic not in ("other", "secret", "invalid_output", "released"):
             verdict = guardrails.operator_verdict(text)
             # Naming one of the options is an approval of that option.
             chosen = None if verdict == "no" else guardrails.value_in_reply(topic, text)
@@ -345,15 +348,36 @@ class BookingAgent:
         # A booking that was already confirmed is now out of date: the
         # manager has to agree to the new terms, and the recap must run
         # again with them.
-        if self.convo.state in ("confirmed", "done"):
-            previous, self.convo.state = self.convo.state, "negotiating"
-            self.convo.outcome = None
-            self.journal.write(
-                "booking_reopened",
-                reason=f"{key} changed to {after}",
-                **{"from": previous, "to": "negotiating"},
-            )
-            print(f"Booking reopened: {key} is now {after}, awaiting a fresh yes.")
+        self._reopen(f"{key} changed to {after}")
+
+    def _confirming_quote(self) -> tuple[str, str] | None:
+        """The manager's last message that confirmed the booking, and when."""
+        for item in reversed(self.convo.manager_turns()):
+            if guardrails.confirmation_markers(item["text"]):
+                return item["text"], self._local_time(item.get("ts"))
+        return None
+
+    def _local_time(self, stamp: str | None) -> str:
+        try:
+            return datetime.fromisoformat(stamp).astimezone(self.facts.tz).strftime("%H:%M")
+        except Exception:
+            return "the time"
+
+    def _reopen(self, reason: str, markers: list[str] | None = None) -> None:
+        """Put a settled booking back on the table; a fresh recap must follow."""
+        if self.convo.state not in ("confirmed", "done"):
+            return
+        previous, self.convo.state = self.convo.state, "negotiating"
+        self.convo.outcome = None
+        self.journal.write(
+            "booking_reopened",
+            level="warning",
+            reason=reason,
+            markers=markers,
+            **{"from": previous, "to": "negotiating"},
+        )
+        self._save()
+        print(f"Booking reopened: {reason}.")
 
     def _record_outcome(self, new_state: str, decision: Decision, last_manager: str) -> None:
         """Write down how this ended, once, the first time we know."""
@@ -498,9 +522,30 @@ class BookingAgent:
                     reason="already agreed",
                 )
 
+            # 0. The table we had has been let go again.
+            released = guardrails.release_markers(last_manager)
+            if released and self.convo.state in ("confirmed", "done"):
+                self._reopen("released by restaurant", markers=released)
+                await self._send(
+                    guardrails.holding_line(), decision=decision, note="holding", speak=speak
+                )
+                await self._escalate(
+                    "released",
+                    "The table we had confirmed has been released: "
+                    + ", ".join(released),
+                    batch,
+                    decision,
+                )
+                return
+
+            # Careful: `settled` above means "this change is already agreed".
+            booking_done = self.convo.state in ("confirmed", "done")
+
             # 1. Off topic, including role-change attempts.
             if decision.off_topic and not secret:
-                line = guardrails.off_topic_line(booking, self.convo.off_topic_count)
+                line = guardrails.off_topic_line(
+                    booking, self.convo.off_topic_count, settled=booking_done
+                )
                 self.convo.off_topic_count += 1
                 await self._send(line, decision=decision, note="off_topic", speak=speak)
                 return
@@ -508,12 +553,28 @@ class BookingAgent:
             # 2. "Are you a bot?" - honest, and the wording comes from the code.
             if decision.asked_if_bot or guardrails.asks_if_bot(last_manager):
                 await self._send(
-                    guardrails.bot_disclosure_line(booking),
+                    guardrails.bot_disclosure_line(booking, settled=booking_done),
                     decision=decision,
                     note="bot_disclosure",
                     speak=speak,
                 )
                 return
+
+            # 2b. "What did I say?" - their words, verbatim, or nothing.
+            if guardrails.asks_for_quote(last_manager):
+                quoted = self._confirming_quote()
+                if quoted is not None:
+                    said, when = quoted
+                    await self._send(
+                        guardrails.quote_line(said, when),
+                        decision=decision,
+                        note="quote",
+                        speak=False,
+                    )
+                    return
+                self.journal.write(
+                    "quote_unavailable", level="warning", manager=last_manager
+                )
 
             # 3. Anything needing the operator's say-so.
             if (decision.needs_operator and not settled) or change or payment or secret:
@@ -630,6 +691,15 @@ class BookingAgent:
                     greeting=greeting,
                     booking=booking.time,
                 )
+                # Quotation marks may only hold the manager's own words.
+                reply, invented = guardrails.check_quotes(
+                    reply, [turn["text"] for turn in self.convo.manager_turns()]
+                )
+                if invented:
+                    self.journal.write(
+                        "quote_dropped", level="warning", quotes=invented
+                    )
+
                 # The agent may not offer the manager anything the operator
                 # has not approved.
                 clash = guardrails.conflicting_values(reply, booking)

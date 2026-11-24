@@ -158,10 +158,11 @@ checks by name.
    is not a booking - and entering it sends a recap built in code, carrying
    all five fields: party size, time, date, restaurant, guest name. The model
    never writes that message and cannot skip it.
-4. If an approved change arrives after the booking was confirmed - the
-   restaurant rings back to move the time - the booking reopens
-   (`negotiating`, outcome cleared, `booking_reopened` in the journal) and
-   the manager's fresh yes produces a fresh recap with the new terms.
+4. If the booking changes after it was confirmed - the restaurant moves the
+   time, or lets the table go ("cancelled", "given away") - it reopens
+   (`negotiating`, outcome cleared, `booking_reopened` in the journal; a
+   release also goes to you in Saved Messages) and the manager's fresh yes
+   produces a fresh, full recap with the new terms.
 5. A final no from the restaurant also ends the conversation: `done` with
    `outcome: "no_booking"` in `state.json`, against `"booked"` for a table
    secured. Either way a `booking_outcome` line lands in the journal.
@@ -254,6 +255,8 @@ Enforced in code, not just asked for in the prompt:
   recap when the manager's confirmation names a different time
 - "are you a bot?" gets an honest fixed answer: an AI assistant arranging
   this on behalf of the guest
+- quotation marks only ever hold the manager's own words: a quote that is
+  not verbatim from the conversation is dropped before the message is sent
 - links and attachments are never opened; non-text messages are logged and
   ignored
 

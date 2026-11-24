@@ -201,6 +201,47 @@ check("marker: confirmed", "confirmed" in guardrails.confirmation_markers("You a
 check("no marker on availability", guardrails.confirmation_markers("Yes, we have a table for two at 9pm.") == [])
 check("no marker on a question", guardrails.confirmation_markers("How many guests?") == [])
 
+# the table that was held and is no longer
+check("release: cancelled", guardrails.release_markers("the client cancelled") == ["cancelled"])
+check("release: given away", "given away" in guardrails.release_markers("your table was given away"))
+check("release: no longer have", bool(guardrails.release_markers("we no longer have that table")))
+check("release: released", bool(guardrails.release_markers("I had to release it")))
+check("not a release", guardrails.release_markers("that's booked for you") == [])
+check("a question is not a release", guardrails.release_markers("shall I hold it?") == [])
+
+# quoting
+check("asked for a quote", guardrails.asks_for_quote("What did I say exactly?"))
+check("asked to quote", guardrails.asks_for_quote("Quote my message, please."))
+check("asked for their words", guardrails.asks_for_quote("Give me my exact words."))
+check("not asked", not guardrails.asks_for_quote("What time did we say?"))
+said = ["Yes, the table is booked for you at 9pm.", "We have a table."]
+kept, dropped = guardrails.check_quotes(
+    'You wrote "Yes, the table is booked for you at 9pm." Thank you.', said
+)
+check("a real quote stays", "Yes, the table is booked" in kept and dropped == [])
+kept, dropped = guardrails.check_quotes(
+    'You said "I guarantee it is yours". Thank you.', said
+)
+check("an invented quote goes", "guarantee" not in kept)
+check("the rest of the message stays", kept == "Thank you.")
+check("and it is reported", dropped == ["I guarantee it is yours"])
+kept, dropped = guardrails.check_quotes('You wrote "the table is BOOKED for you".', said)
+check("case and spacing do not matter", dropped == [])
+check("unquoted text is never touched", guardrails.check_quotes("Thank you kindly.", said)[0] == "Thank you kindly.")
+check(
+    "the quote line carries the time",
+    guardrails.quote_line("Yes, booked.", "09:13")
+    == 'Of course - at 09:13 you wrote: "Yes, booked."',
+)
+
+# once it is booked, nothing is left to confirm
+check("off-topic, settled", "all set" in guardrails.off_topic_line(facts, 0, settled=True))
+check("every settled refusal says so", all("all set" in guardrails.off_topic_line(facts, n, True) for n in range(3)))
+check("and none asks to confirm", not any("shall we confirm" in guardrails.off_topic_line(facts, n, True).lower() for n in range(3)))
+check("disclosure, settled", "all set" in guardrails.bot_disclosure_line(facts, settled=True))
+check("disclosure still owns up", "AI assistant" in guardrails.bot_disclosure_line(facts, settled=True))
+check("unsettled wording unchanged", "are we all right" in guardrails.bot_disclosure_line(facts))
+
 # "under X's name" -> "under the name X"
 check(
     "possessive rewritten",

@@ -136,6 +136,25 @@ journals `booking_reopened`; the topic also leaves `resolved_changes`, since
 the value moved and may move again. The manager's fresh yes then produces a
 fresh recap with the new terms and a new `booking_outcome`.
 
+**A table can also be taken away.** The first real conversation with a
+restaurant went: confirmed, then "the client cancelled, your table was
+given away". A release marker (cancelled, released, given away, no longer
+have, fell through) in a message while the booking is `confirmed` or `done`
+reopens it the same way an approved change does - `negotiating`, outcome
+cleared, `booking_reopened` with `reason: "released by restaurant"` - and
+goes to the operator, because that is news they need. When the restaurant
+reinstates it, the manager's fresh yes produces a full recap again, all
+five fields.
+
+**Quotation marks only ever hold the manager's own words.** Asked to repeat
+what they had said, the agent is liable to paraphrase and present it as a
+quote. Now a request to quote is answered in code: the last manager message
+that carried a confirmation, verbatim, in quotes, with the time it was
+sent. And every drafted reply is checked - any quoted span that is not a
+verbatim substring of something the manager actually wrote takes its whole
+sentence with it, logged as `quote_dropped`. Matching ignores case and
+spacing and nothing else.
+
 **Naming an option is approving it.** Asked to choose between 6pm and 4pm,
 the operator answers "6 pm", not "yes" - and the old code filed that as
 unclear. A reply that contains a concrete value for the pending topic is

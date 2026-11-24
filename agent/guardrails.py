@@ -279,18 +279,32 @@ _OFF_TOPIC = (
     "I'd better stick to the booking, if you don't mind - are we all right for "
     "{time}?",
 )
+# Once the table is booked there is nothing left to settle, and asking
+# again sounds like the agent has lost the thread.
+_OFF_TOPIC_SETTLED = (
+    "I'm afraid I can only help with the reservation - the table for {time} is "
+    "all set.",
+    "That's rather outside my remit, I'm afraid. We're all set for {time}.",
+    "I'd better stick to the booking, if you don't mind - the table for {time} "
+    "is all set.",
+)
 
 
-def off_topic_line(facts: Facts, seen: int = 0) -> str:
+def off_topic_line(facts: Facts, seen: int = 0, settled: bool = False) -> str:
     """Three ways of saying no, so a persistent manager is not met with a parrot."""
-    return _OFF_TOPIC[seen % len(_OFF_TOPIC)].format(time=facts.time_human)
+    lines = _OFF_TOPIC_SETTLED if settled else _OFF_TOPIC
+    return lines[seen % len(lines)].format(time=facts.time_human)
 
 
-def bot_disclosure_line(facts: Facts) -> str:
+def bot_disclosure_line(facts: Facts, settled: bool = False) -> str:
+    tail = (
+        f"The table for {facts.time_human} is all set."
+        if settled
+        else f"Happy to carry on either way - are we all right for {facts.time_human}?"
+    )
     return (
         f"To be straight with you, I'm an AI assistant arranging this on behalf of "
-        f"{facts.guest_name}. Happy to carry on either way - are we all right for "
-        f"{facts.time_human}?"
+        f"{facts.guest_name}. {tail}"
     )
 
 
@@ -469,3 +483,62 @@ _CONFIRMATION = re.compile(
 
 def confirmation_markers(text: str) -> list[str]:
     return sorted({m.group(0).lower() for m in _CONFIRMATION.finditer(text or "")})
+
+
+# A booking that was made and is now gone again.
+_RELEASED = re.compile(
+    r"\b(cancell?ed|cancelling|canceling|released|let it go|given away|gave it away"
+    r"|no longer (?:have|holding|available|hold)|fell through|had to release"
+    r"|cannot hold|can't hold|couldn't hold)\b",
+    re.IGNORECASE,
+)
+
+
+def release_markers(text: str) -> list[str]:
+    """The restaurant saying the table they held is no longer held."""
+    return sorted({m.group(0).lower() for m in _RELEASED.finditer(text or "")})
+
+
+_ASKS_FOR_QUOTE = re.compile(
+    r"\b(quote|cite|my (?:exact )?words|what (?:did|do) i (?:say|write|wrote)"
+    r"|repeat what i|copy what i|my message)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_quote(text: str) -> bool:
+    return bool(_ASKS_FOR_QUOTE.search(text or ""))
+
+
+def quote_line(text: str, when: str) -> str:
+    """Their own words, verbatim, with the time they said them."""
+    return f'Of course - at {when} you wrote: "{text}"'
+
+
+_QUOTED = re.compile(r"[\"“]([^\"“”]{3,})[\"”]")
+
+
+def _flatten(text: str) -> str:
+    return " ".join((text or "").split()).lower()
+
+
+def check_quotes(reply: str, manager_texts: list[str]) -> tuple[str, list[str]]:
+    """Drop any sentence quoting words the manager never wrote.
+
+    Returns the reply and whatever was dropped. Matching ignores case and
+    spacing, but nothing else: an invented quote is an invented quote.
+    """
+    haystack = [_flatten(text) for text in manager_texts]
+    dropped: list[str] = []
+    kept: list[str] = []
+    for sentence in _sentences(reply or ""):
+        invented = [
+            match.group(1)
+            for match in _QUOTED.finditer(sentence)
+            if not any(_flatten(match.group(1)) in text for text in haystack)
+        ]
+        if invented:
+            dropped.extend(invented)
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip(), dropped
